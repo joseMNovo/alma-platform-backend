@@ -7,7 +7,7 @@
 /.next/
 /out/
 
-/venv/
+venv/
 
 # production
 /build
