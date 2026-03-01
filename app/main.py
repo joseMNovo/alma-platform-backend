@@ -16,6 +16,7 @@ from app.routers import (
     inscripciones,
     calendar,
     participants,
+    register,
 )
 
 app = FastAPI(
@@ -51,6 +52,7 @@ app.include_router(inventario.router,    prefix="/inventario",    tags=["Inventa
 app.include_router(inscripciones.router, prefix="/inscripciones", tags=["Inscripciones"],  **common)
 app.include_router(calendar.router,      prefix="/calendar",      tags=["Calendar"],       **common)
 app.include_router(participants.router,  prefix="/participants",  tags=["Participants"],   **common)
+app.include_router(register.router,      prefix="/register",      tags=["Register"],       **common)
 
 
 @app.get("/", tags=["Health"])
