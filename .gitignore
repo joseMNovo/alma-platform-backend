@@ -60,3 +60,9 @@ logs/*
 
 seed_db.py
 init_db.py
+
+# python cache
+__pycache__/
+  *.pyc
+
+*.sql

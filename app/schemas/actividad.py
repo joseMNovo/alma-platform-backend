@@ -10,7 +10,7 @@ class ActividadBase(BaseModel):
 
 
 class ActividadCreate(ActividadBase):
-    pass
+    created_by_volunteer_id: Optional[int] = None
 
 
 class ActividadUpdate(BaseModel):
@@ -25,3 +25,5 @@ class Actividad(ActividadBase):
     id: int
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    created_by_volunteer_id: Optional[int] = None
+    created_by_name: Optional[str] = None
