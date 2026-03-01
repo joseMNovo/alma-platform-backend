@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # Clave compartida entre Next.js y FastAPI. Debe ser larga y aleatoria.
     INTERNAL_API_KEY: str = ""
 
-    VERSION: str = "1.0.0"
+    VERSION: str = "1.0.1"
 
     @property
     def cors_origins_list(self) -> list[str]:
