@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     ALMA_REGISTER_TOKEN: str = "123456"
 
-    VERSION: str = "1.0.3"
+    VERSION: str = "1.1.0"
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -116,6 +116,20 @@ def delete_pending_item(pending_id: str, item_id: str, db: Session = Depends(get
 @router.post("/sync")
 def sync_pendientes(data: SyncPendientesRequest, db: Session = Depends(get_db)):
     """Borra todos los pendientes y sub-items y los reemplaza con los datos enviados."""
+    # Validar que todos los pendientes y sub-items tengan voluntario asignado
+    for task in data.tasks:
+        if not task.assigned_volunteer_id or not str(task.assigned_volunteer_id).strip():
+            raise HTTPException(
+                status_code=422,
+                detail=f"El pendiente '{task.description[:50]}' no tiene voluntario asignado"
+            )
+        for sub in task.sub_items:
+            if not sub.assigned_volunteer_id or not str(sub.assigned_volunteer_id).strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"La sub-tarea '{sub.description[:50]}' no tiene voluntario asignado"
+                )
+
     db.query(PendingItemModel).delete(synchronize_session=False)
     db.query(PendienteModel).delete(synchronize_session=False)
 
