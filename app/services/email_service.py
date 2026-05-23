@@ -136,16 +136,16 @@ _BODIES: dict[str, str] = {
   Hola <strong style="font-weight:600;color:#4D4D4D;">{{name}}</strong>, el equipo de ALMA<br>aprobó tu solicitud como voluntario/a.
 </p>
 <p style="margin:0 0 36px;color:#AAAAAA;font-size:13px;line-height:1.6;font-weight:300;">
-  Si todavía no tenés PIN, usá la opción <em>"Olvidé mi PIN"</em><br>en el inicio de sesión para crear uno.
+  El último paso es crear tu PIN de acceso.<br>El link es válido por 24 horas.
 </p>
 <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 auto;">
   <tr>
     <td style="border-radius:7px;background:#5EC0CF;">
-      <a href="{{app_url}}"
+      <a href="{{pin_reset_url}}"
          style="display:inline-block;padding:11px 28px;color:#ffffff;text-decoration:none;
                 font-size:14px;font-weight:600;border-radius:7px;letter-spacing:0.3px;
                 font-family:'Nunito Sans',Arial,sans-serif;">
-        Ir a la plataforma
+        Creá tu PIN
       </a>
     </td>
   </tr>

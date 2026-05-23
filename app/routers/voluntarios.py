@@ -136,13 +136,16 @@ def approve_voluntario(id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(v)
 
+    raw = token_service.create_pin_reset_token(db, "volunteer", v.id)
+    pin_reset_url = f"{settings.APP_BASE_URL}/restablecer-pin?token={raw}&type=volunteer"
+
     email_service.send_email(db, SendEmailRequest(
         to=[v.email],
         subject="¡Tu cuenta fue aprobada! - ALMA",
         template="approved",
         variables={
             "name": v.name,
-            "app_url": settings.APP_BASE_URL,
+            "pin_reset_url": pin_reset_url,
         },
     ))
 
