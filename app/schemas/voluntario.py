@@ -13,10 +13,11 @@ class VoluntarioBase(BaseModel):
     email: Optional[str] = None
     registration_date: date
     birth_date: Optional[date] = None
-    status: str = "activo"
+    status: str = "pendiente"
     specialties: Optional[Any] = None
     is_admin: bool = False
-    auth_user_id: Optional[int] = None
+    email_verified: bool = False
+    email_verified_at: Optional[datetime] = None
 
 
 class VoluntarioCreate(VoluntarioBase):
@@ -36,8 +37,9 @@ class VoluntarioUpdate(BaseModel):
     status: Optional[str] = None
     specialties: Optional[Any] = None
     is_admin: Optional[bool] = None
-    auth_user_id: Optional[int] = None
     pin_hash: Optional[str] = None
+    email_verified: Optional[bool] = None
+    email_verified_at: Optional[datetime] = None
 
 
 class VoluntarioAuth(BaseModel):
@@ -59,3 +61,13 @@ class Voluntario(VoluntarioBase):
     id: int
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+class VoluntarioRegister(BaseModel):
+    name: str
+    last_name: Optional[str] = None
+    email: str
+    phone: Optional[str] = None
+    birth_date: Optional[date] = None
+    gender: Optional[str] = None
+    age: Optional[int] = None

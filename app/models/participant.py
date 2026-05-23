@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, Text, Boolean, TIMESTAMP, ForeignKey
+from sqlalchemy import Column, Integer, String, Date, Text, Boolean, TIMESTAMP, DateTime, ForeignKey
 from app.database import Base
 
 
@@ -9,6 +9,8 @@ class Participant(Base):
     email = Column(String(150), nullable=False, unique=True)
     pin_hash = Column(String(255))
     is_active = Column(Boolean, nullable=False, default=True)
+    email_verified = Column(Boolean, nullable=False, default=False)
+    email_verified_at = Column(DateTime, nullable=True)
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
 

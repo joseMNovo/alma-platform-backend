@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, Text, Boolean, JSON, TIMESTAMP, ForeignKey
+from sqlalchemy import Column, Integer, String, Date, Text, Boolean, JSON, TIMESTAMP, DateTime
 from app.database import Base
 
 
@@ -15,10 +15,11 @@ class Voluntario(Base):
     email = Column(String(150))
     registration_date = Column(Date, nullable=False)
     birth_date = Column(Date)
-    status = Column(String(20), nullable=False, default="activo")
+    status = Column(String(20), nullable=False, default="pendiente")
     specialties = Column(JSON)
     is_admin = Column(Boolean, nullable=False, default=False)
     pin_hash = Column(String(255))
-    auth_user_id = Column(Integer, ForeignKey("auth_users.id", use_alter=True, name="fk_voluntarios_auth_user"), nullable=True)
+    email_verified = Column(Boolean, nullable=False, default=False)
+    email_verified_at = Column(DateTime, nullable=True)
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)

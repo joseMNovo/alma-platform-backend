@@ -23,7 +23,12 @@ class Settings(BaseSettings):
 
     ALMA_REGISTER_TOKEN: str = "123456"
 
-    VERSION: str = "1.1.0"
+    RESEND_API_KEY: str = ""
+    MAIL_FROM: str = "hola@almarosario.org.ar"
+    APP_BASE_URL: str = "http://localhost:3000"
+    TOKEN_EXPIRY_HOURS: int = 24
+
+    VERSION: str = "1.2.0"
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -10,14 +10,14 @@ from app.routers import (
     grupos,
     actividades,
     pendientes,
-    auth,
     pagos,
     inventario,
     inscripciones,
     calendar,
     participants,
-    register,
     ideas,
+    emails,
+    pin_reset,
 )
 
 app = FastAPI(
@@ -47,14 +47,14 @@ app.include_router(talleres.router,      prefix="/talleres",      tags=["Tallere
 app.include_router(grupos.router,        prefix="/grupos",         tags=["Grupos"],         **common)
 app.include_router(actividades.router,   prefix="/actividades",   tags=["Actividades"],    **common)
 app.include_router(pendientes.router,    prefix="/pendientes",    tags=["Pendientes"],     **common)
-app.include_router(auth.router,          prefix="/auth",           tags=["Auth"],           **common)
 app.include_router(pagos.router,         prefix="/pagos",          tags=["Pagos"],          **common)
 app.include_router(inventario.router,    prefix="/inventario",    tags=["Inventario"],     **common)
 app.include_router(inscripciones.router, prefix="/inscripciones", tags=["Inscripciones"],  **common)
 app.include_router(calendar.router,      prefix="/calendar",      tags=["Calendar"],       **common)
 app.include_router(participants.router,  prefix="/participants",  tags=["Participants"],   **common)
-app.include_router(register.router,      prefix="/register",      tags=["Register"],       **common)
 app.include_router(ideas.router,         prefix="/ideas",          tags=["Ideas"],           **common)
+app.include_router(emails.router,        prefix="/emails",         tags=["Emails"],          **common)
+app.include_router(pin_reset.router,     prefix="/pin-reset",      tags=["PinReset"],        **common)
 
 
 @app.get("/", tags=["Health"])

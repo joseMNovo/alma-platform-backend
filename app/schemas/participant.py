@@ -8,6 +8,8 @@ from datetime import date, datetime
 class ParticipantBase(BaseModel):
     email: str
     is_active: bool = True
+    email_verified: bool = False
+    email_verified_at: Optional[datetime] = None
 
 
 class ParticipantCreate(ParticipantBase):
@@ -18,6 +20,8 @@ class ParticipantUpdate(BaseModel):
     email: Optional[str] = None
     is_active: Optional[bool] = None
     pin_hash: Optional[str] = None
+    email_verified: Optional[bool] = None
+    email_verified_at: Optional[datetime] = None
 
 
 class ParticipantAuth(BaseModel):
@@ -27,6 +31,7 @@ class ParticipantAuth(BaseModel):
     id: int
     email: str
     is_active: bool
+    email_verified: bool = False
     pin_hash: Optional[str] = None
 
 

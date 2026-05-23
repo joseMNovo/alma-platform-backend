@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from datetime import datetime, timezone
 
 from app.database import get_db
+from app.schemas.tokens import VerifyEmailRequest
+from app.services import token_service
 from app.models.participant import (
     Participant as ParticipantModel,
     ParticipantProfile as ProfileModel,
@@ -149,3 +152,23 @@ def delete_enrollment(id: int, enrollment_id: int, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="Inscripción no encontrada")
     db.delete(e)
     db.commit()
+
+
+# ── Email verification ────────────────────────────────────────────────
+
+@router.post("/verify-email")
+def verify_email_participant(data: VerifyEmailRequest, db: Session = Depends(get_db)):
+    token = token_service.verify_participant_token(db, data.token)
+    if not token:
+        raise HTTPException(status_code=400, detail="Token inválido o expirado")
+
+    p = db.query(ParticipantModel).filter(ParticipantModel.id == token.participant_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Participante no encontrado")
+
+    p.email_verified = True
+    p.email_verified_at = datetime.now(timezone.utc)
+    token.used_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return {"message": "Email verificado correctamente."}

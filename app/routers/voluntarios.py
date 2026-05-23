@@ -1,10 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from datetime import date, datetime, timezone
 
 from app.database import get_db
 from app.models.voluntario import Voluntario as VoluntarioModel
-from app.schemas.voluntario import Voluntario, VoluntarioCreate, VoluntarioUpdate, VoluntarioAuth
+from app.schemas.voluntario import Voluntario, VoluntarioCreate, VoluntarioUpdate, VoluntarioAuth, VoluntarioRegister
+from app.schemas.tokens import VerifyEmailRequest
+from app.schemas.email_log import SendEmailRequest
+from app.services import token_service, email_service
+from config import settings
 
 router = APIRouter()
 
@@ -78,3 +83,67 @@ def delete_voluntario(id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Voluntario no encontrado")
     db.delete(v)
     db.commit()
+
+
+# ── Auto-registro ─────────────────────────────────────────────────────
+
+@router.post("/register", response_model=Voluntario, status_code=201)
+def register_voluntario(data: VoluntarioRegister, db: Session = Depends(get_db)):
+    if db.query(VoluntarioModel).filter(VoluntarioModel.email == data.email).first():
+        raise HTTPException(status_code=409, detail="El email ya está registrado")
+
+    v = VoluntarioModel(
+        **data.model_dump(),
+        registration_date=date.today(),
+        status="pendiente",
+        is_admin=False,
+        email_verified=True,
+    )
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+
+    return v
+
+
+@router.post("/verify-email")
+def verify_email_voluntario(data: VerifyEmailRequest, db: Session = Depends(get_db)):
+    token = token_service.verify_volunteer_token(db, data.token)
+    if not token:
+        raise HTTPException(status_code=400, detail="Token inválido o expirado")
+
+    v = db.query(VoluntarioModel).filter(VoluntarioModel.id == token.volunteer_id).first()
+    if not v:
+        raise HTTPException(status_code=404, detail="Voluntario no encontrado")
+
+    v.email_verified = True
+    v.email_verified_at = datetime.now(timezone.utc)
+    token.used_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return {"message": "Email verificado. Tu cuenta está pendiente de aprobación por el administrador."}
+
+
+@router.post("/{id}/approve", response_model=Voluntario)
+def approve_voluntario(id: int, db: Session = Depends(get_db)):
+    v = db.query(VoluntarioModel).filter(VoluntarioModel.id == id).first()
+    if not v:
+        raise HTTPException(status_code=404, detail="Voluntario no encontrado")
+    if v.status != "pendiente":
+        raise HTTPException(status_code=400, detail="El voluntario no está pendiente de aprobación")
+
+    v.status = "activo"
+    db.commit()
+    db.refresh(v)
+
+    email_service.send_email(db, SendEmailRequest(
+        to=[v.email],
+        subject="¡Tu cuenta fue aprobada! - ALMA",
+        template="approved",
+        variables={
+            "name": v.name,
+            "app_url": settings.APP_BASE_URL,
+        },
+    ))
+
+    return v
