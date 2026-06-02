@@ -17,6 +17,7 @@ from app.schemas.participant import (
     ParticipantProfile, ParticipantProfileCreate, ParticipantProfileUpdate,
     ParticipantProgramEnrollment, ParticipantProgramEnrollmentCreate,
 )
+from app.utils.logger import log_info, log_warn, log_error
 
 router = APIRouter()
 
@@ -63,32 +64,49 @@ def get_participant_by_email(email: str, db: Session = Depends(get_db)):
 
 @router.post("/", response_model=Participant, status_code=201)
 def create_participant(data: ParticipantCreate, db: Session = Depends(get_db)):
-    p = ParticipantModel(**data.model_dump())
-    db.add(p)
-    db.commit()
-    db.refresh(p)
-    return p
+    try:
+        p = ParticipantModel(**data.model_dump())
+        db.add(p)
+        db.commit()
+        db.refresh(p)
+        log_info("Participante creado", module="participantes", action="create_participant", meta={"id": p.id})
+        return p
+    except Exception:
+        log_error("Error al crear participante", module="participantes", action="create_participant", exc_info=True)
+        raise
 
 
 @router.put("/{id}", response_model=Participant)
 def update_participant(id: int, data: ParticipantUpdate, db: Session = Depends(get_db)):
     p = db.query(ParticipantModel).filter(ParticipantModel.id == id).first()
     if not p:
+        log_warn("Participante no encontrado para editar", module="participantes", action="edit_participant", meta={"id": id})
         raise HTTPException(status_code=404, detail="Participante no encontrado")
-    for key, value in data.model_dump(exclude_unset=True).items():
-        setattr(p, key, value)
-    db.commit()
-    db.refresh(p)
-    return p
+    try:
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(p, key, value)
+        db.commit()
+        db.refresh(p)
+        log_info("Participante actualizado", module="participantes", action="edit_participant", meta={"id": id})
+        return p
+    except Exception:
+        log_error("Error al actualizar participante", module="participantes", action="edit_participant", meta={"id": id}, exc_info=True)
+        raise
 
 
 @router.delete("/{id}", status_code=204)
 def delete_participant(id: int, db: Session = Depends(get_db)):
     p = db.query(ParticipantModel).filter(ParticipantModel.id == id).first()
     if not p:
+        log_warn("Participante no encontrado para eliminar", module="participantes", action="delete_participant", meta={"id": id})
         raise HTTPException(status_code=404, detail="Participante no encontrado")
-    db.delete(p)
-    db.commit()
+    try:
+        db.delete(p)
+        db.commit()
+        log_info("Participante eliminado", module="participantes", action="delete_participant", meta={"id": id})
+    except Exception:
+        log_error("Error al eliminar participante", module="participantes", action="delete_participant", meta={"id": id}, exc_info=True)
+        raise
 
 
 # ── Participant Profiles ──────────────────────────────────────────────
@@ -160,15 +178,22 @@ def delete_enrollment(id: int, enrollment_id: int, db: Session = Depends(get_db)
 def verify_email_participant(data: VerifyEmailRequest, db: Session = Depends(get_db)):
     token = token_service.verify_participant_token(db, data.token)
     if not token:
+        log_warn("Token de verificación inválido o expirado (participante)", module="participantes", action="verify_email")
         raise HTTPException(status_code=400, detail="Token inválido o expirado")
 
     p = db.query(ParticipantModel).filter(ParticipantModel.id == token.participant_id).first()
     if not p:
+        log_warn("Participante no encontrado al verificar email", module="participantes", action="verify_email", meta={"participant_id": token.participant_id})
         raise HTTPException(status_code=404, detail="Participante no encontrado")
 
-    p.email_verified = True
-    p.email_verified_at = datetime.now(timezone.utc)
-    token.used_at = datetime.now(timezone.utc)
-    db.commit()
+    try:
+        p.email_verified = True
+        p.email_verified_at = datetime.now(timezone.utc)
+        token.used_at = datetime.now(timezone.utc)
+        db.commit()
+        log_info("Email de participante verificado", module="participantes", action="verify_email", meta={"id": p.id})
+    except Exception:
+        log_error("Error al verificar email de participante", module="participantes", action="verify_email", meta={"id": p.id}, exc_info=True)
+        raise
 
     return {"message": "Email verificado correctamente."}

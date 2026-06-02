@@ -5,6 +5,7 @@ from typing import List, Optional
 from app.database import get_db
 from app.models.pago import Pago as PagoModel
 from app.schemas.pago import Pago, PagoCreate, PagoUpdate
+from app.utils.logger import log_info, log_warn, log_error
 
 router = APIRouter()
 
@@ -35,29 +36,46 @@ def get_pago(id: int, db: Session = Depends(get_db)):
 
 @router.post("/", response_model=Pago, status_code=201)
 def create_pago(data: PagoCreate, db: Session = Depends(get_db)):
-    p = PagoModel(**data.model_dump())
-    db.add(p)
-    db.commit()
-    db.refresh(p)
-    return p
+    try:
+        p = PagoModel(**data.model_dump())
+        db.add(p)
+        db.commit()
+        db.refresh(p)
+        log_info("Pago creado", module="pagos", action="create_pago", meta={"id": p.id, "user_id": p.user_id})
+        return p
+    except Exception:
+        log_error("Error al crear pago", module="pagos", action="create_pago", exc_info=True)
+        raise
 
 
 @router.put("/{id}", response_model=Pago)
 def update_pago(id: int, data: PagoUpdate, db: Session = Depends(get_db)):
     p = db.query(PagoModel).filter(PagoModel.id == id).first()
     if not p:
+        log_warn("Pago no encontrado para editar", module="pagos", action="edit_pago", meta={"id": id})
         raise HTTPException(status_code=404, detail="Pago no encontrado")
-    for key, value in data.model_dump(exclude_unset=True).items():
-        setattr(p, key, value)
-    db.commit()
-    db.refresh(p)
-    return p
+    try:
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(p, key, value)
+        db.commit()
+        db.refresh(p)
+        log_info("Pago actualizado", module="pagos", action="edit_pago", meta={"id": id})
+        return p
+    except Exception:
+        log_error("Error al actualizar pago", module="pagos", action="edit_pago", meta={"id": id}, exc_info=True)
+        raise
 
 
 @router.delete("/{id}", status_code=204)
 def delete_pago(id: int, db: Session = Depends(get_db)):
     p = db.query(PagoModel).filter(PagoModel.id == id).first()
     if not p:
+        log_warn("Pago no encontrado para eliminar", module="pagos", action="delete_pago", meta={"id": id})
         raise HTTPException(status_code=404, detail="Pago no encontrado")
-    db.delete(p)
-    db.commit()
+    try:
+        db.delete(p)
+        db.commit()
+        log_info("Pago eliminado", module="pagos", action="delete_pago", meta={"id": id})
+    except Exception:
+        log_error("Error al eliminar pago", module="pagos", action="delete_pago", meta={"id": id}, exc_info=True)
+        raise

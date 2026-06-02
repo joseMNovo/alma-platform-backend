@@ -6,13 +6,20 @@ from app.database import get_db
 from app.models.email_log import EmailLog
 from app.schemas.email_log import SendEmailRequest, EmailLogOut
 from app.services import email_service
+from app.utils.logger import log_info, log_error
 
 router = APIRouter()
 
 
 @router.post("/send", response_model=EmailLogOut, status_code=201)
 def send_email(req: SendEmailRequest, db: Session = Depends(get_db)):
-    return email_service.send_email(db, req)
+    try:
+        result = email_service.send_email(db, req)
+        log_info("Email enviado", module="emails", action="send_email", meta={"template": req.template, "to_count": len(req.to)})
+        return result
+    except Exception:
+        log_error("Error al enviar email", module="emails", action="send_email", meta={"template": req.template}, exc_info=True)
+        raise
 
 
 @router.get("/logs", response_model=List[EmailLogOut])

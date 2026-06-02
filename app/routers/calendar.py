@@ -18,6 +18,7 @@ from app.schemas.calendar import (
     CalendarEventParticipant, CalendarEventParticipantCreate, CalendarEventParticipantUpdate,
     BulkDeleteFilters, GenerateCalendarParams,
 )
+from app.utils.logger import log_info, log_warn, log_error
 
 router = APIRouter()
 
@@ -128,32 +129,49 @@ def get_instance(id: int, db: Session = Depends(get_db)):
 
 @router.post("/instances", response_model=CalendarInstance, status_code=201)
 def create_instance(data: CalendarInstanceCreate, db: Session = Depends(get_db)):
-    ci = CIModel(**data.model_dump())
-    db.add(ci)
-    db.commit()
-    db.refresh(ci)
-    return ci
+    try:
+        ci = CIModel(**data.model_dump())
+        db.add(ci)
+        db.commit()
+        db.refresh(ci)
+        log_info("Evento de calendario creado", module="calendarios", action="create_event", meta={"id": ci.id, "type": ci.type, "date": str(ci.date)})
+        return ci
+    except Exception:
+        log_error("Error al crear evento de calendario", module="calendarios", action="create_event", exc_info=True)
+        raise
 
 
 @router.put("/instances/{id}", response_model=CalendarInstance)
 def update_instance(id: int, data: CalendarInstanceUpdate, db: Session = Depends(get_db)):
     ci = db.query(CIModel).filter(CIModel.id == id).first()
     if not ci:
+        log_warn("Evento de calendario no encontrado para editar", module="calendarios", action="edit_event", meta={"id": id})
         raise HTTPException(status_code=404, detail="Instancia no encontrada")
-    for key, value in data.model_dump(exclude_unset=True).items():
-        setattr(ci, key, value)
-    db.commit()
-    db.refresh(ci)
-    return ci
+    try:
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(ci, key, value)
+        db.commit()
+        db.refresh(ci)
+        log_info("Evento de calendario actualizado", module="calendarios", action="edit_event", meta={"id": id})
+        return ci
+    except Exception:
+        log_error("Error al actualizar evento de calendario", module="calendarios", action="edit_event", meta={"id": id}, exc_info=True)
+        raise
 
 
 @router.delete("/instances/{id}", status_code=204)
 def delete_instance(id: int, db: Session = Depends(get_db)):
     ci = db.query(CIModel).filter(CIModel.id == id).first()
     if not ci:
+        log_warn("Evento de calendario no encontrado para eliminar", module="calendarios", action="delete_event", meta={"id": id})
         raise HTTPException(status_code=404, detail="Instancia no encontrada")
-    db.delete(ci)
-    db.commit()
+    try:
+        db.delete(ci)
+        db.commit()
+        log_info("Evento de calendario eliminado", module="calendarios", action="delete_event", meta={"id": id})
+    except Exception:
+        log_error("Error al eliminar evento de calendario", module="calendarios", action="delete_event", meta={"id": id}, exc_info=True)
+        raise
 
 
 # ── Calendar Assignments ──────────────────────────────────────────────
@@ -238,26 +256,31 @@ def generate_calendar_instances(params: GenerateCalendarParams, db: Session = De
     created_ids = []
     current = start
 
-    while current <= end:
-        tipo = types[type_index % 2]
-        source_id = params.source_group_id if tipo == "grupo" else params.source_workshop_id
+    try:
+        while current <= end:
+            tipo = types[type_index % 2]
+            source_id = params.source_group_id if tipo == "grupo" else params.source_workshop_id
 
-        ci = CIModel(
-            type=tipo,
-            source_id=source_id,
-            date=current,
-            start_time=start_time,
-            end_time=end_time,
-            status="programado",
-        )
-        db.add(ci)
-        db.flush()
-        created_ids.append(ci.id)
+            ci = CIModel(
+                type=tipo,
+                source_id=source_id,
+                date=current,
+                start_time=start_time,
+                end_time=end_time,
+                status="programado",
+            )
+            db.add(ci)
+            db.flush()
+            created_ids.append(ci.id)
 
-        current += timedelta(days=params.interval_days)
-        type_index += 1
+            current += timedelta(days=params.interval_days)
+            type_index += 1
 
-    db.commit()
+        db.commit()
+        log_info("Calendario generado", module="calendarios", action="generate_calendar", meta={"created": len(created_ids), "start_date": params.start_date, "end_date": params.end_date})
+    except Exception:
+        log_error("Error al generar calendario", module="calendarios", action="generate_calendar", exc_info=True)
+        raise
 
     instances = db.query(CIModel).filter(CIModel.id.in_(created_ids)).order_by(CIModel.date).all()
     return {
@@ -283,10 +306,15 @@ def bulk_count(filters: BulkDeleteFilters, db: Session = Depends(get_db)):
 
 @router.post("/bulk-delete")
 def bulk_delete(filters: BulkDeleteFilters, db: Session = Depends(get_db)):
-    where, bind = _build_bulk_where(filters)
-    result = db.execute(text(f"DELETE FROM calendar_instances WHERE {where}"), bind)
-    db.commit()
-    return {"deleted": result.rowcount}
+    try:
+        where, bind = _build_bulk_where(filters)
+        result = db.execute(text(f"DELETE FROM calendar_instances WHERE {where}"), bind)
+        db.commit()
+        log_info("Eliminación masiva de calendario", module="calendarios", action="bulk_delete", meta={"deleted": result.rowcount, "scope": filters.scope})
+        return {"deleted": result.rowcount}
+    except Exception:
+        log_error("Error en eliminación masiva de calendario", module="calendarios", action="bulk_delete", exc_info=True)
+        raise
 
 
 def _build_bulk_where(filters: BulkDeleteFilters):

@@ -5,6 +5,7 @@ from typing import List, Optional
 from app.database import get_db
 from app.models.actividad import Actividad as ActividadModel
 from app.schemas.actividad import Actividad, ActividadCreate, ActividadUpdate
+from app.utils.logger import log_info, log_warn, log_error
 
 router = APIRouter()
 
@@ -49,29 +50,46 @@ def get_actividad(id: int, db: Session = Depends(get_db)):
 
 @router.post("/", response_model=Actividad, status_code=201)
 def create_actividad(data: ActividadCreate, db: Session = Depends(get_db)):
-    a = ActividadModel(**data.model_dump())
-    db.add(a)
-    db.commit()
-    db.refresh(a)
-    return _serialize(a)
+    try:
+        a = ActividadModel(**data.model_dump())
+        db.add(a)
+        db.commit()
+        db.refresh(a)
+        log_info("Actividad creada", module="actividades", action="create_actividad", meta={"id": a.id, "name": a.name})
+        return _serialize(a)
+    except Exception:
+        log_error("Error al crear actividad", module="actividades", action="create_actividad", exc_info=True)
+        raise
 
 
 @router.put("/{id}", response_model=Actividad)
 def update_actividad(id: int, data: ActividadUpdate, db: Session = Depends(get_db)):
     a = db.query(ActividadModel).filter(ActividadModel.id == id).first()
     if not a:
+        log_warn("Actividad no encontrada para editar", module="actividades", action="edit_actividad", meta={"id": id})
         raise HTTPException(status_code=404, detail="Actividad no encontrada")
-    for key, value in data.model_dump(exclude_unset=True).items():
-        setattr(a, key, value)
-    db.commit()
-    db.refresh(a)
-    return _serialize(a)
+    try:
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(a, key, value)
+        db.commit()
+        db.refresh(a)
+        log_info("Actividad actualizada", module="actividades", action="edit_actividad", meta={"id": id})
+        return _serialize(a)
+    except Exception:
+        log_error("Error al actualizar actividad", module="actividades", action="edit_actividad", meta={"id": id}, exc_info=True)
+        raise
 
 
 @router.delete("/{id}", status_code=204)
 def delete_actividad(id: int, db: Session = Depends(get_db)):
     a = db.query(ActividadModel).filter(ActividadModel.id == id).first()
     if not a:
+        log_warn("Actividad no encontrada para eliminar", module="actividades", action="delete_actividad", meta={"id": id})
         raise HTTPException(status_code=404, detail="Actividad no encontrada")
-    db.delete(a)
-    db.commit()
+    try:
+        db.delete(a)
+        db.commit()
+        log_info("Actividad eliminada", module="actividades", action="delete_actividad", meta={"id": id})
+    except Exception:
+        log_error("Error al eliminar actividad", module="actividades", action="delete_actividad", meta={"id": id}, exc_info=True)
+        raise

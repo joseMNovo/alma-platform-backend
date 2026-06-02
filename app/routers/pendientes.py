@@ -9,6 +9,7 @@ from app.schemas.pendiente import (
     PendingItem, PendingItemCreate, PendingItemUpdate,
     SyncPendientesRequest,
 )
+from app.utils.logger import log_info, log_warn, log_error
 
 router = APIRouter()
 
@@ -119,41 +120,49 @@ def sync_pendientes(data: SyncPendientesRequest, db: Session = Depends(get_db)):
     # Validar que todos los pendientes y sub-items tengan voluntario asignado
     for task in data.tasks:
         if not task.assigned_volunteer_id or not str(task.assigned_volunteer_id).strip():
+            log_warn("Sync rechazado: pendiente sin voluntario asignado", module="pendientes", action="sync", meta={"description_preview": task.description[:50]})
             raise HTTPException(
                 status_code=422,
                 detail=f"El pendiente '{task.description[:50]}' no tiene voluntario asignado"
             )
         for sub in task.sub_items:
             if not sub.assigned_volunteer_id or not str(sub.assigned_volunteer_id).strip():
+                log_warn("Sync rechazado: sub-tarea sin voluntario asignado", module="pendientes", action="sync", meta={"description_preview": sub.description[:50]})
                 raise HTTPException(
                     status_code=422,
                     detail=f"La sub-tarea '{sub.description[:50]}' no tiene voluntario asignado"
                 )
 
-    db.query(PendingItemModel).delete(synchronize_session=False)
-    db.query(PendienteModel).delete(synchronize_session=False)
+    try:
+        db.query(PendingItemModel).delete(synchronize_session=False)
+        db.query(PendienteModel).delete(synchronize_session=False)
 
-    for task in data.tasks:
-        p = PendienteModel(
-            id=task.id,
-            description=task.description,
-            assigned_volunteer_id=task.assigned_volunteer_id,
-            completed=task.completed,
-            created_date=task.created_date,
-            completed_date=task.completed_date,
-        )
-        db.add(p)
-        for sub in task.sub_items:
-            pi = PendingItemModel(
-                id=sub.id,
-                pending_id=task.id,
-                description=sub.description,
-                assigned_volunteer_id=sub.assigned_volunteer_id,
-                completed=sub.completed,
-                created_date=sub.created_date,
-                completed_date=sub.completed_date,
+        for task in data.tasks:
+            p = PendienteModel(
+                id=task.id,
+                description=task.description,
+                assigned_volunteer_id=task.assigned_volunteer_id,
+                completed=task.completed,
+                created_date=task.created_date,
+                completed_date=task.completed_date,
             )
-            db.add(pi)
+            db.add(p)
+            for sub in task.sub_items:
+                pi = PendingItemModel(
+                    id=sub.id,
+                    pending_id=task.id,
+                    description=sub.description,
+                    assigned_volunteer_id=sub.assigned_volunteer_id,
+                    completed=sub.completed,
+                    created_date=sub.created_date,
+                    completed_date=sub.completed_date,
+                )
+                db.add(pi)
 
-    db.commit()
+        db.commit()
+        log_info("Pendientes sincronizados", module="pendientes", action="sync", meta={"synced": len(data.tasks)})
+    except Exception:
+        log_error("Error al sincronizar pendientes", module="pendientes", action="sync", exc_info=True)
+        raise
+
     return {"synced": len(data.tasks)}

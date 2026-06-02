@@ -74,7 +74,7 @@ _BASE = """\
 
 _BODIES: dict[str, str] = {
     "verification": """\
-<h1 style="margin:0 0 16px;color:#1A6B7A;font-size:28px;font-weight:700;line-height:1.3;
+<h1 style="margin:0 0 16px;color:#9A8BC2;font-size:28px;font-weight:700;line-height:1.3;
            font-family:'Nunito Sans',Arial,sans-serif;">
   ¡Bienvenido/a,<br>{{name}}!
 </h1>
@@ -101,7 +101,7 @@ _BODIES: dict[str, str] = {
 </p>""",
 
     "pin_reset": """\
-<h1 style="margin:0 0 16px;color:#1A6B7A;font-size:28px;font-weight:700;line-height:1.3;
+<h1 style="margin:0 0 16px;color:#9A8BC2;font-size:28px;font-weight:700;line-height:1.3;
            font-family:'Nunito Sans',Arial,sans-serif;">
   Restablecer<br>tu PIN
 </h1>
@@ -128,7 +128,7 @@ _BODIES: dict[str, str] = {
 </p>""",
 
     "approved": """\
-<h1 style="margin:0 0 16px;color:#1A6B7A;font-size:28px;font-weight:700;line-height:1.3;
+<h1 style="margin:0 0 16px;color:#9A8BC2;font-size:28px;font-weight:700;line-height:1.3;
            font-family:'Nunito Sans',Arial,sans-serif;">
   ¡Tu cuenta<br>fue aprobada!
 </h1>
