@@ -105,8 +105,10 @@ def delete_voluntario(id: int, db: Session = Depends(get_db)):
 
 # ── Auto-registro ─────────────────────────────────────────────────────
 
+FALLBACK_ADMIN_EMAIL = "manunovo@gmail.com"
+
 @router.post("/register", response_model=Voluntario, status_code=201)
-def register_voluntario(data: VoluntarioRegister, db: Session = Depends(get_db)):
+def register_voluntario(data: VoluntarioRegister, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     if db.query(VoluntarioModel).filter(VoluntarioModel.email == data.email).first():
         log_warn("Intento de registro con email ya existente", module="voluntarios", action="register")
         raise HTTPException(status_code=409, detail="El email ya está registrado")
@@ -124,10 +126,38 @@ def register_voluntario(data: VoluntarioRegister, db: Session = Depends(get_db))
         db.refresh(v)
         email_masked = data.email[:2] + "***" + data.email[data.email.find("@"):]
         log_info("Voluntario registrado", module="voluntarios", action="register", meta={"id": v.id, "email_masked": email_masked})
-        return v
     except Exception:
         log_error("Error al registrar voluntario", module="voluntarios", action="register", exc_info=True)
         raise
+
+    # Notificar a admins
+    admin_emails = [
+        a.email for a in
+        db.query(VoluntarioModel).filter(
+            VoluntarioModel.is_admin == True,
+            VoluntarioModel.status == "activo",
+            VoluntarioModel.email != None,
+        ).all()
+        if a.email
+    ]
+    recipients = admin_emails if admin_emails else [FALLBACK_ADMIN_EMAIL]
+
+    background_tasks.add_task(
+        email_service.send_email,
+        db,
+        SendEmailRequest(
+            to=recipients,
+            subject="Nueva solicitud de voluntario/a — ALMA",
+            template="new_volunteer",
+            variables={
+                "name": f"{v.name}{(' ' + v.last_name) if v.last_name else ''}",
+                "email": v.email,
+                "app_url": settings.APP_BASE_URL,
+            },
+        ),
+    )
+
+    return v
 
 
 @router.post("/verify-email")

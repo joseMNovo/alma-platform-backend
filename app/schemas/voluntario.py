@@ -53,6 +53,12 @@ class VoluntarioAuth(BaseModel):
     status: str
     is_admin: bool
     pin_hash: Optional[str] = None
+    phone: Optional[str] = None
+    gender: Optional[str] = None
+    age: Optional[int] = None
+    birth_date: Optional[date] = None
+    photo: Optional[str] = None
+    specialties: Optional[Any] = None
 
 
 class Voluntario(VoluntarioBase):

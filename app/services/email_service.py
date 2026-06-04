@@ -127,6 +127,41 @@ _BODIES: dict[str, str] = {
   Si no solicitaste este cambio podés ignorar este email.
 </p>""",
 
+    "new_volunteer": """\
+<h1 style="margin:0 0 16px;color:#9A8BC2;font-size:28px;font-weight:700;line-height:1.3;
+           font-family:'Nunito Sans',Arial,sans-serif;">
+  Nueva solicitud<br>de voluntario/a
+</h1>
+<p style="margin:0 0 24px;color:#6B6B6B;font-size:15px;line-height:1.8;font-weight:300;">
+  <strong style="font-weight:600;color:#4D4D4D;">{{name}}</strong> se registró en ALMA<br>
+  y está esperando tu aprobación.
+</p>
+<table role="presentation" cellspacing="0" cellpadding="0"
+       style="margin:0 auto 32px;background:#F8F8F8;border-radius:8px;width:100%;max-width:360px;">
+  <tr>
+    <td style="padding:20px 24px;">
+      <p style="margin:0 0 8px;color:#9A9A9A;font-size:12px;font-weight:600;
+                text-transform:uppercase;letter-spacing:0.5px;">Email</p>
+      <p style="margin:0;color:#4D4D4D;font-size:14px;font-weight:400;">{{email}}</p>
+    </td>
+  </tr>
+</table>
+<p style="margin:0 0 28px;color:#AAAAAA;font-size:13px;line-height:1.6;font-weight:300;">
+  Ingresá a la plataforma ALMA para revisar<br>y aprobar la solicitud.
+</p>
+<table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 auto;">
+  <tr>
+    <td style="border-radius:7px;background:#5EC0CF;">
+      <a href="{{app_url}}/aprobaciones"
+         style="display:inline-block;padding:11px 28px;color:#ffffff;text-decoration:none;
+                font-size:14px;font-weight:600;border-radius:7px;letter-spacing:0.3px;
+                font-family:'Nunito Sans',Arial,sans-serif;">
+        Ver aprobaciones
+      </a>
+    </td>
+  </tr>
+</table>""",
+
     "approved": """\
 <h1 style="margin:0 0 16px;color:#9A8BC2;font-size:28px;font-weight:700;line-height:1.3;
            font-family:'Nunito Sans',Arial,sans-serif;">

@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     APP_BASE_URL: str = "http://localhost:3000"
     TOKEN_EXPIRY_HOURS: int = 24
 
-    VERSION: str = "1.2.2"
+    VERSION: str = "1.2.3"
 
     @property
     def cors_origins_list(self) -> list[str]:
