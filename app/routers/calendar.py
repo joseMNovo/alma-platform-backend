@@ -48,7 +48,7 @@ def list_instances_rich(
     """Instancias de calendario con coordinadores y co-coordinadores (JOIN a voluntarios)."""
     sql = """
     SELECT
-        ci.id, ci.type, ci.source_id, ci.date, ci.start_time, ci.end_time, ci.notes, ci.status,
+        ci.id, ci.type, ci.source_id, ci.title, ci.date, ci.start_time, ci.end_time, ci.notes, ci.status,
         coord_v.id   AS coord_id,   coord_v.name   AS coord_name,   coord_v.last_name AS coord_last,
         cocoord_v.id AS cocoord_id, cocoord_v.name AS cocoord_name, cocoord_v.last_name AS cocoord_last
     FROM calendar_instances ci
@@ -80,6 +80,7 @@ def list_instances_rich(
             "id": row.id,
             "type": row.type,
             "source_id": row.source_id,
+            "title": row.title,
             "date": str(row.date),
             "start_time": _fmt_time(row.start_time),
             "end_time": _fmt_time(row.end_time),

@@ -16,6 +16,7 @@ class CalendarInstanceRich(BaseModel):
     id: int
     type: str
     source_id: Optional[int] = None
+    title: Optional[str] = None
     date: str
     start_time: str
     end_time: str
@@ -54,6 +55,7 @@ class AssignmentUpsertRequest(BaseModel):
 class CalendarInstanceBase(BaseModel):
     type: Literal["grupo", "taller", "actividad"]
     source_id: Optional[int] = None
+    title: Optional[str] = None
     date: date
     start_time: time = time(10, 0)
     end_time: time = time(12, 0)
@@ -68,6 +70,7 @@ class CalendarInstanceCreate(CalendarInstanceBase):
 class CalendarInstanceUpdate(BaseModel):
     type: Optional[Literal["grupo", "taller", "actividad"]] = None
     source_id: Optional[int] = None
+    title: Optional[str] = None
     date: Optional[date] = None
     start_time: Optional[time] = None
     end_time: Optional[time] = None

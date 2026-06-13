@@ -8,6 +8,7 @@ class CalendarInstance(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     type = Column(String(20), nullable=False)
     source_id = Column(Integer)
+    title = Column(String(150))
     date = Column(Date, nullable=False)
     start_time = Column(Time, nullable=False)
     end_time = Column(Time, nullable=False)
