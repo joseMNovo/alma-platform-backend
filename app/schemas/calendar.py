@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, Literal, List, Any
-from datetime import date, time, datetime
+# `date` se importa con alias para que el campo llamado `date` (con default) no sombree el tipo
+from datetime import date as date_type, time, datetime
 
 
 # ── Calendario rico (con voluntarios JOIN) ────────────────────────────
@@ -64,7 +65,7 @@ class CalendarInstanceBase(BaseModel):
     type: Literal["grupo", "taller", "actividad"]
     source_id: Optional[int] = None
     title: Optional[str] = None
-    date: date
+    date: date_type
     start_time: time = time(10, 0)
     end_time: time = time(12, 0)
     notes: Optional[str] = None
@@ -81,7 +82,7 @@ class CalendarInstanceUpdate(BaseModel):
     type: Optional[Literal["grupo", "taller", "actividad"]] = None
     source_id: Optional[int] = None
     title: Optional[str] = None
-    date: Optional[date] = None
+    date: Optional[date_type] = None
     start_time: Optional[time] = None
     end_time: Optional[time] = None
     notes: Optional[str] = None
