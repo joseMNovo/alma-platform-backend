@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, Time, Text, TIMESTAMP, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Date, Time, Text, TIMESTAMP, ForeignKey, JSON, func
 from app.database import Base
 
 
@@ -27,8 +27,10 @@ class CalendarAssignment(Base):
     instance_id = Column(Integer, ForeignKey("calendar_instances.id", ondelete="CASCADE"), nullable=False)
     volunteer_id = Column(Integer, ForeignKey("voluntarios.id", ondelete="RESTRICT"), nullable=False)
     role = Column(String(20), nullable=False)
-    created_at = Column(TIMESTAMP)
-    updated_at = Column(TIMESTAMP)
+    # server_default: deja que MySQL aplique el DEFAULT CURRENT_TIMESTAMP en el INSERT
+    # (sin esto, SQLAlchemy mandaba el campo en NULL y pisaba el default de la columna)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), server_onupdate=func.now())
 
 
 class CalendarEventParticipant(Base):
