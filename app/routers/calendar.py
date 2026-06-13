@@ -1,6 +1,8 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, bindparam
 from typing import List, Optional
 from datetime import date, timedelta
 
@@ -14,7 +16,7 @@ from app.schemas.calendar import (
     CalendarInstance, CalendarInstanceCreate, CalendarInstanceUpdate,
     CalendarInstanceRich, VolunteerRef,
     CalendarAssignment, CalendarAssignmentCreate, CalendarAssignmentUpdate,
-    AssignmentUpsertRequest,
+    AssignmentUpsertRequest, VolunteerListRequest,
     CalendarEventParticipant, CalendarEventParticipantCreate, CalendarEventParticipantUpdate,
     BulkDeleteFilters, GenerateCalendarParams,
 )
@@ -45,10 +47,11 @@ def list_instances_rich(
     volunteer_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
 ):
-    """Instancias de calendario con coordinadores y co-coordinadores (JOIN a voluntarios)."""
+    """Instancias de calendario con coordinadores, co-coordinadores y lista de voluntarios (JOIN a voluntarios)."""
     sql = """
     SELECT
         ci.id, ci.type, ci.source_id, ci.title, ci.date, ci.start_time, ci.end_time, ci.notes, ci.status,
+        ci.notify_enabled, ci.reminder_offsets,
         coord_v.id   AS coord_id,   coord_v.name   AS coord_name,   coord_v.last_name AS coord_last,
         cocoord_v.id AS cocoord_id, cocoord_v.name AS cocoord_name, cocoord_v.last_name AS cocoord_last
     FROM calendar_instances ci
@@ -69,12 +72,53 @@ def list_instances_rich(
         sql += " AND ci.type = :type"
         params["type"] = type
     if volunteer_id is not None:
-        sql += " AND (coord_ca.volunteer_id = :vol_id OR cocoord_ca.volunteer_id = :vol_id)"
+        sql += """ AND (
+            coord_ca.volunteer_id = :vol_id
+            OR cocoord_ca.volunteer_id = :vol_id
+            OR EXISTS (
+                SELECT 1 FROM calendar_assignments va
+                WHERE va.instance_id = ci.id AND va.role = 'volunteer' AND va.volunteer_id = :vol_id
+            )
+        )"""
         params["vol_id"] = volunteer_id
 
     sql += " ORDER BY ci.date ASC, ci.start_time ASC"
 
     rows = db.execute(text(sql), params).fetchall()
+    if not rows:
+        return []
+
+    # Lista de voluntarios (role='volunteer') de todas las instancias en una sola query
+    instance_ids = [row.id for row in rows]
+    vol_rows = db.execute(
+        text(
+            """
+            SELECT ca.instance_id, v.id, v.name, v.last_name
+            FROM calendar_assignments ca
+            JOIN voluntarios v ON v.id = ca.volunteer_id
+            WHERE ca.role = 'volunteer' AND ca.instance_id IN :ids
+            ORDER BY v.name ASC
+            """
+        ).bindparams(bindparam("ids", expanding=True)),
+        {"ids": instance_ids},
+    ).fetchall()
+
+    volunteers_by_instance: dict[int, list] = {}
+    for vr in vol_rows:
+        volunteers_by_instance.setdefault(vr.instance_id, []).append(
+            {"id": vr.id, "name": vr.name, "last_name": vr.last_name or ""}
+        )
+
+    def _parse_offsets(raw):
+        if raw is None:
+            return None
+        if isinstance(raw, (list, tuple)):
+            return list(raw)
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+
     return [
         {
             "id": row.id,
@@ -86,10 +130,13 @@ def list_instances_rich(
             "end_time": _fmt_time(row.end_time),
             "notes": row.notes,
             "status": row.status,
+            "notify_enabled": bool(row.notify_enabled),
+            "reminder_offsets": _parse_offsets(row.reminder_offsets),
             "coordinator": {"id": row.coord_id, "name": row.coord_name, "last_name": row.coord_last or ""}
                 if row.coord_id else None,
             "co_coordinator": {"id": row.cocoord_id, "name": row.cocoord_name, "last_name": row.cocoord_last or ""}
                 if row.cocoord_id else None,
+            "volunteers": volunteers_by_instance.get(row.id, []),
         }
         for row in rows
     ]
@@ -218,6 +265,32 @@ def delete_assignment_by_role(instance_id: int, role: str, db: Session = Depends
     db.commit()
 
 
+@router.put("/instances/{instance_id}/volunteers", response_model=List[CalendarAssignment])
+def set_event_volunteers(
+    instance_id: int, data: VolunteerListRequest, db: Session = Depends(get_db)
+):
+    """Reemplaza la lista completa de voluntarios (role='volunteer') de una instancia."""
+    if not db.query(CIModel).filter(CIModel.id == instance_id).first():
+        raise HTTPException(status_code=404, detail="Instancia no encontrada")
+
+    # Borra los voluntarios actuales (no toca coordinator/co_coordinator) y reinserta sin duplicados
+    db.query(CAModel).filter(
+        CAModel.instance_id == instance_id, CAModel.role == "volunteer"
+    ).delete(synchronize_session=False)
+
+    seen: set[int] = set()
+    for vol_id in data.volunteer_ids:
+        if vol_id in seen:
+            continue
+        seen.add(vol_id)
+        db.add(CAModel(instance_id=instance_id, volunteer_id=vol_id, role="volunteer"))
+
+    db.commit()
+    return db.query(CAModel).filter(
+        CAModel.instance_id == instance_id, CAModel.role == "volunteer"
+    ).all()
+
+
 @router.put("/assignments/{id}", response_model=CalendarAssignment)
 def update_assignment(id: int, data: CalendarAssignmentUpdate, db: Session = Depends(get_db)):
     ca = db.query(CAModel).filter(CAModel.id == id).first()
@@ -291,7 +364,8 @@ def generate_calendar_instances(params: GenerateCalendarParams, db: Session = De
                 "id": ci.id, "type": ci.type, "source_id": ci.source_id,
                 "date": str(ci.date), "start_time": _fmt_time(ci.start_time),
                 "end_time": _fmt_time(ci.end_time), "notes": ci.notes,
-                "status": ci.status, "coordinator": None, "co_coordinator": None,
+                "status": ci.status, "notify_enabled": False, "reminder_offsets": None,
+                "coordinator": None, "co_coordinator": None, "volunteers": [],
             }
             for ci in instances
         ],

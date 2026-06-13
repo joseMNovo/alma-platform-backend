@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, Time, Text, TIMESTAMP, ForeignKey
+from sqlalchemy import Column, Integer, String, Date, Time, Text, TIMESTAMP, ForeignKey, JSON
 from app.database import Base
 
 
@@ -14,6 +14,8 @@ class CalendarInstance(Base):
     end_time = Column(Time, nullable=False)
     notes = Column(Text)
     status = Column(String(20), nullable=False, default="programado")
+    notify_enabled = Column(Integer, nullable=False, default=0)
+    reminder_offsets = Column(JSON, nullable=True)
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
 

@@ -22,8 +22,11 @@ class CalendarInstanceRich(BaseModel):
     end_time: str
     notes: Optional[str] = None
     status: str
+    notify_enabled: bool = False
+    reminder_offsets: Optional[List[int]] = None
     coordinator: Optional[VolunteerRef] = None
     co_coordinator: Optional[VolunteerRef] = None
+    volunteers: List[VolunteerRef] = []
 
 
 # ── Operaciones bulk ──────────────────────────────────────────────────
@@ -50,6 +53,11 @@ class AssignmentUpsertRequest(BaseModel):
     volunteer_id: int
 
 
+class VolunteerListRequest(BaseModel):
+    """Reemplaza la lista completa de voluntarios (role='volunteer') de un evento."""
+    volunteer_ids: List[int]
+
+
 # ── Calendar Instances ────────────────────────────────────────────────
 
 class CalendarInstanceBase(BaseModel):
@@ -61,6 +69,8 @@ class CalendarInstanceBase(BaseModel):
     end_time: time = time(12, 0)
     notes: Optional[str] = None
     status: Literal["programado", "realizado", "cancelado"] = "programado"
+    notify_enabled: bool = False
+    reminder_offsets: Optional[List[int]] = None
 
 
 class CalendarInstanceCreate(CalendarInstanceBase):
@@ -76,6 +86,8 @@ class CalendarInstanceUpdate(BaseModel):
     end_time: Optional[time] = None
     notes: Optional[str] = None
     status: Optional[Literal["programado", "realizado", "cancelado"]] = None
+    notify_enabled: Optional[bool] = None
+    reminder_offsets: Optional[List[int]] = None
 
 
 class CalendarInstance(CalendarInstanceBase):
@@ -91,7 +103,7 @@ class CalendarInstance(CalendarInstanceBase):
 class CalendarAssignmentBase(BaseModel):
     instance_id: int
     volunteer_id: int
-    role: Literal["coordinator", "co_coordinator"]
+    role: Literal["coordinator", "co_coordinator", "volunteer"]
 
 
 class CalendarAssignmentCreate(CalendarAssignmentBase):
@@ -100,7 +112,7 @@ class CalendarAssignmentCreate(CalendarAssignmentBase):
 
 class CalendarAssignmentUpdate(BaseModel):
     volunteer_id: Optional[int] = None
-    role: Optional[Literal["coordinator", "co_coordinator"]] = None
+    role: Optional[Literal["coordinator", "co_coordinator", "volunteer"]] = None
 
 
 class CalendarAssignment(CalendarAssignmentBase):

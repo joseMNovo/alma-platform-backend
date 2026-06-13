@@ -185,6 +185,42 @@ _BODIES: dict[str, str] = {
     </td>
   </tr>
 </table>""",
+
+    "event_assignment": """\
+<h1 style="margin:0 0 16px;color:#9A8BC2;font-size:28px;font-weight:700;line-height:1.3;
+           font-family:'Nunito Sans',Arial,sans-serif;">
+  Recordatorio<br>de actividad
+</h1>
+<p style="margin:0 0 24px;color:#6B6B6B;font-size:15px;line-height:1.8;font-weight:300;">
+  Hola <strong style="font-weight:600;color:#4D4D4D;">{{name}}</strong>, te recordamos que
+  tenés una actividad asignada que es <strong style="font-weight:600;color:#4D4D4D;">{{when_label}}</strong>.
+</p>
+<table role="presentation" cellspacing="0" cellpadding="0"
+       style="margin:0 auto 32px;background:#F8F8F8;border-radius:8px;width:100%;max-width:360px;">
+  <tr>
+    <td style="padding:20px 24px;text-align:left;">
+      <p style="margin:0 0 4px;color:#9A9A9A;font-size:12px;font-weight:600;
+                text-transform:uppercase;letter-spacing:0.5px;">{{event_label}}</p>
+      <p style="margin:0;color:#4D4D4D;font-size:16px;font-weight:600;">{{event_date}} &middot; {{event_time}} hs</p>
+      <p style="margin:8px 0 0;color:#6B6B6B;font-size:13px;font-weight:300;">{{notes}}</p>
+    </td>
+  </tr>
+</table>
+<table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 auto;">
+  <tr>
+    <td style="border-radius:7px;background:#5EC0CF;">
+      <a href="{{app_url}}/calendarios"
+         style="display:inline-block;padding:11px 28px;color:#ffffff;text-decoration:none;
+                font-size:14px;font-weight:600;border-radius:7px;letter-spacing:0.3px;
+                font-family:'Nunito Sans',Arial,sans-serif;">
+        Ver el calendario
+      </a>
+    </td>
+  </tr>
+</table>
+<p style="margin:32px 0 0;color:#BBBBBB;font-size:12px;font-weight:300;">
+  Gracias por tu compromiso con ALMA. 💙
+</p>""",
 }
 
 

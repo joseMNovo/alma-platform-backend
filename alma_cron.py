@@ -2,10 +2,11 @@
 """
 alma_cron.py — Recordatorios por email a voluntarios asignados a eventos del calendario.
 
-Pensado para ejecutarse 1 vez por día desde cron en la VPS Linux. Ejemplo de crontab:
+Se ejecuta 1 vez por día, todos los días a las 06:00 AM (hora del servidor), desde cron
+en la VPS Linux. Entrada de crontab:
 
-    # Todos los días a las 08:00 (hora del servidor)
-    0 8 * * *  cd /ruta/alma-platform-backend && /ruta/venv/bin/python alma_cron.py >> /var/log/alma_cron.out 2>&1
+    # Todos los días a las 06:00 AM (hora del servidor)
+    0 6 * * *  cd /ruta/alma-platform-backend && /ruta/venv/bin/python alma_cron.py >> /var/log/alma_cron.out 2>&1
 
 Lógica:
   1. Toma la fecha de hoy.
@@ -27,12 +28,13 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import urllib.error
+import urllib.request
 from datetime import date, datetime, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import pymysql
-import requests
 
 from config import settings
 
@@ -59,9 +61,12 @@ REQUEST_TIMEOUT = 20  # segundos
 
 # ── Logging ────────────────────────────────────────────────────────────────
 
+LOG_DIR = Path(__file__).resolve().parent / "logs" / "cron"
+LOG_FILE = LOG_DIR / "alma_cron.log"
+
+
 def _build_logger() -> logging.Logger:
-    log_dir = Path(__file__).resolve().parent / "logs" / "cron"
-    log_dir.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
 
     logger = logging.getLogger("alma_cron")
     logger.setLevel(logging.INFO)
@@ -73,7 +78,7 @@ def _build_logger() -> logging.Logger:
     )
 
     file_handler = RotatingFileHandler(
-        log_dir / "alma_cron.log", maxBytes=2_000_000, backupCount=5, encoding="utf-8"
+        LOG_FILE, maxBytes=2_000_000, backupCount=5, encoding="utf-8"
     )
     file_handler.setFormatter(fmt)
 
@@ -213,27 +218,38 @@ def send_reminder(row: dict, offset: int) -> bool:
         "sent_by_volunteer_id": None,
     }
 
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        EMAIL_ENDPOINT,
+        data=data,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Key": settings.INTERNAL_API_KEY,
+        },
+    )
+
     try:
-        resp = requests.post(
-            EMAIL_ENDPOINT,
-            json=payload,
-            headers={
-                "Content-Type": "application/json",
-                "X-API-Key": settings.INTERNAL_API_KEY,
-            },
-            timeout=REQUEST_TIMEOUT,
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as resp:
+            status_code = resp.status
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")[:300]
+        log.error(
+            "Endpoint /emails/send devolvió %s para %s (evento %s, offset %s): %s",
+            exc.code, row["email"], row["event_id"], offset, body,
         )
-    except requests.RequestException as exc:
+        return False
+    except urllib.error.URLError as exc:
         log.error(
             "Fallo de red al enviar a %s (evento %s, offset %s): %s",
             row["email"], row["event_id"], offset, exc,
         )
         return False
 
-    if resp.status_code != 201:
+    if status_code != 201:
         log.error(
-            "Endpoint /emails/send devolvió %s para %s (evento %s, offset %s): %s",
-            resp.status_code, row["email"], row["event_id"], offset, resp.text[:300],
+            "Endpoint /emails/send devolvió %s para %s (evento %s, offset %s)",
+            status_code, row["email"], row["event_id"], offset,
         )
         return False
 
@@ -249,11 +265,12 @@ def send_reminder(row: dict, offset: int) -> bool:
 
 def run() -> int:
     today = date.today()
-    log.info("=== alma_cron iniciado | hoy = %s ===", today.isoformat())
+    log.info("=== alma_cron iniciado | hoy = %s | log = %s ===", today.isoformat(), LOG_FILE)
 
     sent = 0
     skipped = 0
     failed = 0
+    due = 0  # recordatorios que vencieron hoy o antes (corresponde actuar sobre ellos)
 
     try:
         conn = get_connection()
@@ -263,7 +280,7 @@ def run() -> int:
 
     try:
         candidates = fetch_candidates(conn, today)
-        log.info("Filas candidatas (evento×voluntario con notify): %d", len(candidates))
+        log.info("Candidatos (evento × voluntario con notificación activa): %d", len(candidates))
 
         for row in candidates:
             offsets = parse_offsets(row["reminder_offsets"])
@@ -279,9 +296,16 @@ def run() -> int:
                     continue
 
                 # Vencido (today >= send_on) y el evento no pasó (garantizado por el WHERE).
+                due += 1
+                when_label = OFFSET_LABELS.get(offset, f"{offset} días antes")
+
                 # Reservamos de forma atómica para no duplicar.
                 if already_sent(conn, row["event_id"], row["volunteer_id"], offset):
                     skipped += 1
+                    log.info(
+                        "OMITIDO (ya enviado) | evento %s | voluntario %s <%s> | recordatorio %s",
+                        row["event_id"], row["volunteer_id"], row["email"], when_label,
+                    )
                     continue
 
                 if send_reminder(row, offset):
@@ -290,6 +314,9 @@ def run() -> int:
                     release_reservation(conn, row["event_id"], row["volunteer_id"], offset)
                     failed += 1
 
+        if due == 0:
+            log.info("No hay recordatorios vencidos para hoy. Nada para enviar.")
+
     except Exception as exc:  # noqa: BLE001
         log.exception("Error inesperado durante la corrida: %s", exc)
         return 1
@@ -297,8 +324,8 @@ def run() -> int:
         conn.close()
 
     log.info(
-        "=== alma_cron finalizado | enviados=%d, ya_enviados=%d, fallidos=%d ===",
-        sent, skipped, failed,
+        "=== alma_cron finalizado | vencidos=%d → enviados=%d, omitidos(ya enviados)=%d, fallidos=%d ===",
+        due, sent, skipped, failed,
     )
     return 0
 
