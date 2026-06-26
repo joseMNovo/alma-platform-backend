@@ -25,6 +25,7 @@ class CalendarInstanceRich(BaseModel):
     status: str
     notify_enabled: bool = False
     reminder_offsets: Optional[List[int]] = None
+    created_by_volunteer_id: Optional[int] = None
     coordinator: Optional[VolunteerRef] = None
     co_coordinator: Optional[VolunteerRef] = None
     volunteers: List[VolunteerRef] = []
@@ -72,6 +73,7 @@ class CalendarInstanceBase(BaseModel):
     status: Literal["programado", "realizado", "cancelado"] = "programado"
     notify_enabled: bool = False
     reminder_offsets: Optional[List[int]] = None
+    created_by_volunteer_id: Optional[int] = None
 
 
 class CalendarInstanceCreate(CalendarInstanceBase):

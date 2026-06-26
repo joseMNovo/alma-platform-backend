@@ -19,19 +19,29 @@ class ParticipantProfile(Base):
     __tablename__ = "participant_profiles"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    participant_id = Column(Integer, ForeignKey("participants.id", ondelete="CASCADE"), nullable=False, unique=True)
+    # Nullable: una persona puede existir en la base de datos sin cuenta de login
+    # (p. ej. importada del Excel). El login se adjunta luego, vinculado por email.
+    participant_id = Column(Integer, ForeignKey("participants.id", ondelete="CASCADE"), nullable=True, unique=True)
     name = Column(String(100))
     last_name = Column(String(100))
+    email = Column(String(255))            # identidad de la persona (índice único en BD)
+    cuit = Column(String(13))
+    is_member = Column(Boolean, nullable=False, default=False)  # socio/a de ALMA
     phone = Column(String(50))
     birth_date = Column(Date)
     city = Column(String(100))
     province = Column(String(100))
-    address = Column(String(200))
+    postal_code = Column(String(10))
+    address = Column(String(200))          # calle + número
+    floor = Column(String(10))             # piso
+    apartment = Column(String(20))         # depto
     emergency_contact_name = Column(String(100))
     emergency_contact_phone = Column(String(50))
     notes = Column(Text)
     accepts_notifications = Column(Boolean, nullable=False, default=False)
     accepts_whatsapp = Column(Boolean, nullable=False, default=False)
+    source = Column(String(20))            # 'excel' | 'registro' | 'manual'
+    invited_at = Column(DateTime)
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
 

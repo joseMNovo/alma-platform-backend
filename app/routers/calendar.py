@@ -51,7 +51,7 @@ def list_instances_rich(
     sql = """
     SELECT
         ci.id, ci.type, ci.source_id, ci.title, ci.date, ci.start_time, ci.end_time, ci.notes, ci.status,
-        ci.notify_enabled, ci.reminder_offsets,
+        ci.notify_enabled, ci.reminder_offsets, ci.created_by_volunteer_id,
         coord_v.id   AS coord_id,   coord_v.name   AS coord_name,   coord_v.last_name AS coord_last,
         cocoord_v.id AS cocoord_id, cocoord_v.name AS cocoord_name, cocoord_v.last_name AS cocoord_last
     FROM calendar_instances ci
@@ -132,6 +132,7 @@ def list_instances_rich(
             "status": row.status,
             "notify_enabled": bool(row.notify_enabled),
             "reminder_offsets": _parse_offsets(row.reminder_offsets),
+            "created_by_volunteer_id": row.created_by_volunteer_id,
             "coordinator": {"id": row.coord_id, "name": row.coord_name, "last_name": row.coord_last or ""}
                 if row.coord_id else None,
             "co_coordinator": {"id": row.cocoord_id, "name": row.cocoord_name, "last_name": row.cocoord_last or ""}

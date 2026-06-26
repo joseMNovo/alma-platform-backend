@@ -16,6 +16,7 @@ class CalendarInstance(Base):
     status = Column(String(20), nullable=False, default="programado")
     notify_enabled = Column(Integer, nullable=False, default=0)
     reminder_offsets = Column(JSON, nullable=True)
+    created_by_volunteer_id = Column(Integer, ForeignKey("voluntarios.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
 
