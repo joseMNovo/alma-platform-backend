@@ -1,6 +1,8 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from typing import Optional, List, Any
 from datetime import date, datetime
+
+from app.utils.text import normalize_name
 
 
 class VoluntarioBase(BaseModel):
@@ -18,6 +20,11 @@ class VoluntarioBase(BaseModel):
     is_admin: bool = False
     email_verified: bool = False
     email_verified_at: Optional[datetime] = None
+
+    @field_validator("name", "last_name")
+    @classmethod
+    def _normalize_names(cls, v):
+        return normalize_name(v)
 
 
 class VoluntarioCreate(VoluntarioBase):
@@ -40,6 +47,11 @@ class VoluntarioUpdate(BaseModel):
     pin_hash: Optional[str] = None
     email_verified: Optional[bool] = None
     email_verified_at: Optional[datetime] = None
+
+    @field_validator("name", "last_name")
+    @classmethod
+    def _normalize_names(cls, v):
+        return normalize_name(v)
 
 
 class VoluntarioAuth(BaseModel):
@@ -78,6 +90,11 @@ class VoluntarioRegister(BaseModel):
     gender: Optional[str] = None
     age: Optional[int] = None
 
+    @field_validator("name", "last_name")
+    @classmethod
+    def _normalize_names(cls, v):
+        return normalize_name(v)
+
 
 class VoluntarioEnrollFromDb(BaseModel):
     """Alta de voluntario disparada desde el módulo Base de datos (personas).
@@ -93,3 +110,8 @@ class VoluntarioEnrollFromDb(BaseModel):
     age: Optional[int] = None
     persona_id: Optional[int] = None         # persona existente a habilitar
     registered_by_name: Optional[str] = None # quién la dio de alta (para el mail)
+
+    @field_validator("name", "last_name")
+    @classmethod
+    def _normalize_names(cls, v):
+        return normalize_name(v)

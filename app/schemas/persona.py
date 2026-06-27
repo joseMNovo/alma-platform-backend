@@ -1,6 +1,8 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from typing import Optional
 from datetime import date, datetime
+
+from app.utils.text import normalize_name
 
 
 # ── Personas (base de datos ALMA) ─────────────────────────────────────
@@ -23,6 +25,11 @@ class PersonaBase(BaseModel):
     postal_code: Optional[str] = None
     phone: Optional[str] = None
 
+    @field_validator("name", "last_name")
+    @classmethod
+    def _normalize_names(cls, v):
+        return normalize_name(v)
+
 
 class PersonaCreate(PersonaBase):
     source: Optional[str] = "manual"
@@ -42,6 +49,11 @@ class PersonaUpdate(BaseModel):
     province: Optional[str] = None
     postal_code: Optional[str] = None
     phone: Optional[str] = None
+
+    @field_validator("name", "last_name")
+    @classmethod
+    def _normalize_names(cls, v):
+        return normalize_name(v)
 
 
 class Persona(PersonaBase):

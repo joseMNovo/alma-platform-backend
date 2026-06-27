@@ -1,6 +1,8 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from typing import Optional, Literal
 from datetime import date, datetime
+
+from app.utils.text import normalize_name
 
 
 # ── Participants ──────────────────────────────────────────────────────
@@ -60,6 +62,11 @@ class ParticipantProfileBase(BaseModel):
     accepts_notifications: bool = False
     accepts_whatsapp: bool = False
 
+    @field_validator("name", "last_name")
+    @classmethod
+    def _normalize_names(cls, v):
+        return normalize_name(v)
+
 
 class ParticipantProfileCreate(ParticipantProfileBase):
     pass
@@ -78,6 +85,11 @@ class ParticipantProfileUpdate(BaseModel):
     notes: Optional[str] = None
     accepts_notifications: Optional[bool] = None
     accepts_whatsapp: Optional[bool] = None
+
+    @field_validator("name", "last_name")
+    @classmethod
+    def _normalize_names(cls, v):
+        return normalize_name(v)
 
 
 class ParticipantProfile(ParticipantProfileBase):
