@@ -36,7 +36,7 @@ def list_personas(
     if province:
         q = q.filter(ProfileModel.province.ilike(f"%{province}%"))
     return (
-        q.order_by(ProfileModel.last_name, ProfileModel.name)
+        q.order_by(ProfileModel.name, ProfileModel.last_name)
         .offset(skip)
         .limit(limit)
         .all()

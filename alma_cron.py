@@ -122,6 +122,7 @@ def fetch_candidates(conn, today: date) -> list[dict]:
             ci.start_time    AS start_time,
             ci.notes         AS notes,
             ci.reminder_offsets AS reminder_offsets,
+            ci.created_at    AS created_at,
             ca.role          AS role,
             v.id             AS volunteer_id,
             v.name           AS name,
@@ -288,11 +289,23 @@ def run() -> int:
                 continue
 
             event_date: date = row["event_date"]
+            created_at = row.get("created_at")
+            created_date = created_at.date() if isinstance(created_at, datetime) else None
             for offset in offsets:
                 send_on = event_date - timedelta(days=offset)
 
                 # Aún no llegó el momento de este recordatorio
                 if today < send_on:
+                    continue
+
+                # La ventana de este recordatorio cayó ANTES de que el evento se creara:
+                # quedó obsoleta (evento cargado tarde). No se manda. Evita, p. ej., que un
+                # evento creado el jueves dispare el recordatorio de "7 días antes" del miércoles.
+                if created_date is not None and send_on < created_date:
+                    log.info(
+                        "OMITIDO (ventana previa a la creación) | evento %s | offset %s | send_on %s < creado %s",
+                        row["event_id"], offset, send_on.isoformat(), created_date.isoformat(),
+                    )
                     continue
 
                 # Vencido (today >= send_on) y el evento no pasó (garantizado por el WHERE).
