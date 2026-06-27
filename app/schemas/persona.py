@@ -49,6 +49,8 @@ class Persona(PersonaBase):
 
     id: int
     participant_id: Optional[int] = None   # presente => la persona tiene cuenta de login
+    is_volunteer: bool = False             # rol voluntario (flag descriptivo)
+    volunteer_id: Optional[int] = None     # presente => tiene ficha en `voluntarios`
     source: Optional[str] = None
     invited_at: Optional[datetime] = None
     created_at: Optional[datetime] = None

@@ -22,11 +22,15 @@ class ParticipantProfile(Base):
     # Nullable: una persona puede existir en la base de datos sin cuenta de login
     # (p. ej. importada del Excel). El login se adjunta luego, vinculado por email.
     participant_id = Column(Integer, ForeignKey("participants.id", ondelete="CASCADE"), nullable=True, unique=True)
+    # Link a la ficha operativa en `voluntarios` (rol voluntario de la persona).
+    # NULL = la persona no tiene ficha de voluntario. Gemelo de participant_id (login).
+    volunteer_id = Column(Integer, ForeignKey("voluntarios.id", ondelete="SET NULL"), nullable=True, unique=True)
     name = Column(String(100))
     last_name = Column(String(100))
     email = Column(String(255))            # identidad de la persona (índice único en BD)
     cuit = Column(String(13))
     is_member = Column(Boolean, nullable=False, default=False)  # socio/a de ALMA
+    is_volunteer = Column(Boolean, nullable=False, default=False)  # voluntario/a de ALMA (flag descriptivo)
     phone = Column(String(50))
     birth_date = Column(Date)
     city = Column(String(100))

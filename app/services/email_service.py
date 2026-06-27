@@ -162,6 +162,27 @@ _BODIES: dict[str, str] = {
   </tr>
 </table>""",
 
+    "volunteer_pending": """\
+<h1 style="margin:0 0 16px;color:#9A8BC2;font-size:28px;font-weight:700;line-height:1.3;
+           font-family:'Nunito Sans',Arial,sans-serif;">
+  ¡Te sumamos<br>como voluntario/a!
+</h1>
+<p style="margin:0 0 12px;color:#6B6B6B;font-size:15px;line-height:1.8;font-weight:300;">
+  Hola <strong style="font-weight:600;color:#4D4D4D;">{{name}}</strong>,
+  <strong style="font-weight:600;color:#4D4D4D;">{{registered_by}}</strong> te registró<br>
+  como voluntario/a en ALMA.
+</p>
+<p style="margin:0 0 12px;color:#6B6B6B;font-size:15px;line-height:1.8;font-weight:300;">
+  Tu solicitud quedó <strong style="font-weight:600;color:#4D4D4D;">pendiente de aprobación</strong><br>
+  por el equipo de ALMA.
+</p>
+<p style="margin:0 0 8px;color:#AAAAAA;font-size:13px;line-height:1.6;font-weight:300;">
+  Te avisaremos por este mismo medio cuando tu cuenta<br>esté aprobada y puedas crear tu PIN de acceso.
+</p>
+<p style="margin:32px 0 0;color:#BBBBBB;font-size:12px;font-weight:300;">
+  Gracias por sumarte a ALMA. 💙
+</p>""",
+
     "approved": """\
 <h1 style="margin:0 0 16px;color:#9A8BC2;font-size:28px;font-weight:700;line-height:1.3;
            font-family:'Nunito Sans',Arial,sans-serif;">
