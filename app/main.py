@@ -17,6 +17,7 @@ from app.routers import (
     participants,
     personas,
     ideas,
+    group_histories,
     announcements,
     emails,
     pin_reset,
@@ -56,6 +57,7 @@ app.include_router(calendar.router,      prefix="/calendar",      tags=["Calenda
 app.include_router(participants.router,  prefix="/participants",  tags=["Participants"],   **common)
 app.include_router(personas.router,      prefix="/personas",       tags=["Personas"],        **common)
 app.include_router(ideas.router,         prefix="/ideas",          tags=["Ideas"],           **common)
+app.include_router(group_histories.router, prefix="/group-histories", tags=["GroupHistories"], **common)
 app.include_router(announcements.router, prefix="/announcements", tags=["Announcements"],  **common)
 app.include_router(emails.router,        prefix="/emails",         tags=["Emails"],          **common)
 app.include_router(pin_reset.router,     prefix="/pin-reset",      tags=["PinReset"],        **common)
