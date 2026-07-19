@@ -19,8 +19,11 @@ from app.routers import (
     ideas,
     group_histories,
     announcements,
+    activity,
     emails,
     pin_reset,
+    push,
+    notifications,
 )
 
 app = FastAPI(
@@ -59,8 +62,11 @@ app.include_router(personas.router,      prefix="/personas",       tags=["Person
 app.include_router(ideas.router,         prefix="/ideas",          tags=["Ideas"],           **common)
 app.include_router(group_histories.router, prefix="/group-histories", tags=["GroupHistories"], **common)
 app.include_router(announcements.router, prefix="/announcements", tags=["Announcements"],  **common)
+app.include_router(activity.router,      prefix="/activity",      tags=["Activity"],       **common)
 app.include_router(emails.router,        prefix="/emails",         tags=["Emails"],          **common)
 app.include_router(pin_reset.router,     prefix="/pin-reset",      tags=["PinReset"],        **common)
+app.include_router(push.router,          prefix="/push",           tags=["Push"],            **common)
+app.include_router(notifications.router, prefix="/notifications",  tags=["Notifications"],   **common)
 
 
 @app.get("/", tags=["Health"])

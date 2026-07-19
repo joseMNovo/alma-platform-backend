@@ -28,7 +28,14 @@ class Settings(BaseSettings):
     APP_BASE_URL: str = "http://localhost:3000"
     TOKEN_EXPIRY_HOURS: int = 24
 
-    VERSION: str = "1.2.13"
+    # Web Push (VAPID). Si están vacías, el envío push es un no-op silencioso.
+    # Generar con scripts/generate_vapid_keys.py (una sola vez).
+    VAPID_PUBLIC_KEY: str = ""
+    VAPID_PRIVATE_KEY: str = ""
+    # "mailto:" de contacto exigido por el estándar Web Push.
+    VAPID_SUBJECT: str = "mailto:manunovo@gmail.com"
+
+    VERSION: str = "1.3.0"
 
     @property
     def cors_origins_list(self) -> list[str]:

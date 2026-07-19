@@ -55,6 +55,7 @@ TYPE_LABELS: dict[str, str] = {
 }
 
 EMAIL_ENDPOINT = f"http://{settings.API_HOST}:{settings.API_PORT}/emails/send"
+NOTIFY_ENDPOINT = f"http://{settings.API_HOST}:{settings.API_PORT}/notifications/notify"
 EMAIL_TEMPLATE = "event_assignment"
 REQUEST_TIMEOUT = 20  # segundos
 
@@ -262,6 +263,57 @@ def send_reminder(row: dict, offset: int) -> bool:
     return True
 
 
+def send_reminder_push(row: dict, offset: int) -> None:
+    """Envía el MISMO recordatorio como notificación push + campanita al voluntario.
+
+    Best-effort y totalmente aislado del email: cualquier fallo se loguea y se
+    ignora. No afecta contadores ni el flujo de recordatorios por email.
+    """
+    event_date: date = row["event_date"]
+    type_label = TYPE_LABELS.get(row["event_type"], row["event_type"])
+    when_label = OFFSET_LABELS.get(offset, f"en {offset} días")
+    start_time = str(row["start_time"])[:5] if row["start_time"] is not None else ""
+
+    title = f"Recordatorio: {type_label} {when_label}"
+    body_parts = [f"{event_date.strftime('%d/%m/%Y')}"]
+    if start_time:
+        body_parts.append(f"{start_time} hs")
+    body = " · ".join(body_parts)
+
+    payload = {
+        "user_type": "voluntario",
+        "user_id": row["volunteer_id"],
+        "title": title,
+        "body": body,
+        "kind": "calendar_reminder",
+        "url": "/calendarios",
+    }
+
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        NOTIFY_ENDPOINT,
+        data=data,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Key": settings.INTERNAL_API_KEY,
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as resp:
+            if resp.status != 201:
+                log.warning(
+                    "Push recordatorio devolvió %s | evento %s | voluntario %s",
+                    resp.status, row["event_id"], row["volunteer_id"],
+                )
+    except Exception as exc:  # noqa: BLE001 — el push nunca debe romper el cron
+        log.warning(
+            "No se pudo enviar push recordatorio | evento %s | voluntario %s | %s",
+            row["event_id"], row["volunteer_id"], exc,
+        )
+
+
 # ── Orquestación ───────────────────────────────────────────────────────────
 
 def run() -> int:
@@ -323,6 +375,9 @@ def run() -> int:
 
                 if send_reminder(row, offset):
                     sent += 1
+                    # El push va DESPUÉS del email y aislado: si falla, el
+                    # recordatorio por email ya salió y quedó registrado igual.
+                    send_reminder_push(row, offset)
                 else:
                     release_reservation(conn, row["event_id"], row["volunteer_id"], offset)
                     failed += 1

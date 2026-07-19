@@ -6,3 +6,4 @@ pydantic-settings==2.7.0
 cryptography
 email-validator
 resend
+pywebpush==2.0.0
