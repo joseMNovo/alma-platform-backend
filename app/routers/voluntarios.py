@@ -10,10 +10,37 @@ from app.schemas.voluntario import Voluntario, VoluntarioCreate, VoluntarioUpdat
 from app.schemas.tokens import VerifyEmailRequest
 from app.schemas.email_log import SendEmailRequest
 from app.services import token_service, email_service
+from app.services.notification_service import notify_user
 from app.utils.logger import log_info, log_warn, log_error
 from config import settings
 
 router = APIRouter()
+
+
+def _notify_admins_new_volunteer(db: Session, admin_ids: List[int], vol_display: str) -> None:
+    """Avisa a cada admin (campanita + push) que hay una solicitud por aprobar.
+
+    100% best-effort y silencioso: corre como background task SEPARADA del
+    email (que ya se envió antes). Cualquier fallo se traga acá y NUNCA afecta
+    al email ni al registro. Doble red: try/except por admin + try/except global.
+    """
+    try:
+        for aid in admin_ids:
+            try:
+                notify_user(
+                    db,
+                    user_type="voluntario",
+                    user_id=aid,
+                    title="Nueva solicitud de voluntario/a",
+                    body=f"{vol_display} se registró y espera aprobación.",
+                    kind="system",
+                    url="/aprobaciones",
+                )
+            except Exception:
+                log_error("Fallo al notificar aprobación pendiente a admin", module="voluntarios", action="register", meta={"admin_id": aid})
+    except Exception:
+        # Blindaje total: nada de esta tarea puede propagar una excepción.
+        log_error("Fallo general al notificar aprobación pendiente", module="voluntarios", action="register", exc_info=True)
 
 
 @router.get("/auth/{email}", response_model=VoluntarioAuth)
@@ -172,17 +199,16 @@ def register_voluntario(data: VoluntarioRegister, background_tasks: BackgroundTa
         log_error("Error al registrar voluntario", module="voluntarios", action="register", exc_info=True)
         raise
 
-    # Notificar a admins
-    admin_emails = [
-        a.email for a in
-        db.query(VoluntarioModel).filter(
-            VoluntarioModel.is_admin == True,
-            VoluntarioModel.status == "activo",
-            VoluntarioModel.email != None,
-        ).all()
-        if a.email
-    ]
+    # Notificar a admins (activos). Reusamos la query para email + push.
+    admins = db.query(VoluntarioModel).filter(
+        VoluntarioModel.is_admin == True,
+        VoluntarioModel.status == "activo",
+    ).all()
+    admin_emails = [a.email for a in admins if a.email]
+    admin_ids = [a.id for a in admins]
     recipients = admin_emails if admin_emails else [FALLBACK_ADMIN_EMAIL]
+
+    vol_display = f"{v.name}{(' ' + v.last_name) if v.last_name else ''}"
 
     background_tasks.add_task(
         email_service.send_email,
@@ -192,12 +218,15 @@ def register_voluntario(data: VoluntarioRegister, background_tasks: BackgroundTa
             subject="Nueva solicitud de voluntario/a — ALMA",
             template="new_volunteer",
             variables={
-                "name": f"{v.name}{(' ' + v.last_name) if v.last_name else ''}",
+                "name": vol_display,
                 "email": v.email,
                 "app_url": settings.APP_BASE_URL,
             },
         ),
     )
+
+    # Campanita + push a los admins (in-app, además del email).
+    background_tasks.add_task(_notify_admins_new_volunteer, db, admin_ids, vol_display)
 
     return v
 

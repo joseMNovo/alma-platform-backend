@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # "mailto:" de contacto exigido por el estándar Web Push.
     VAPID_SUBJECT: str = "mailto:manunovo@gmail.com"
 
-    VERSION: str = "1.3.0"
+    VERSION: str = "1.3.1"
 
     @property
     def cors_origins_list(self) -> list[str]:
