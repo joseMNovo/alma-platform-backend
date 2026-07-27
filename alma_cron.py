@@ -38,6 +38,7 @@ from pathlib import Path
 import pymysql
 
 from config import settings
+from app.utils.timezone import today_ar, to_ar_date
 
 # ── Configuración ──────────────────────────────────────────────────────────
 
@@ -175,7 +176,7 @@ def already_sent(conn, event_id: int, volunteer_id: int, offset: int) -> bool:
         VALUES (%s, %s, %s, %s)
     """
     with conn.cursor() as cur:
-        cur.execute(sql, (event_id, volunteer_id, offset, date.today()))
+        cur.execute(sql, (event_id, volunteer_id, offset, today_ar()))
         inserted = cur.rowcount
     conn.commit()
     return inserted == 0
@@ -366,7 +367,7 @@ def send_reminder_push(row: dict, offset: int) -> None:
 # ── Orquestación ───────────────────────────────────────────────────────────
 
 def run() -> int:
-    today = date.today()
+    today = today_ar()
     log.info("=== alma_cron iniciado | hoy = %s | log = %s ===", today.isoformat(), LOG_FILE)
 
     sent = 0
@@ -391,7 +392,7 @@ def run() -> int:
 
             event_date: date = row["event_date"]
             created_at = row.get("created_at")
-            created_date = created_at.date() if isinstance(created_at, datetime) else None
+            created_date = to_ar_date(created_at) if isinstance(created_at, datetime) else None
             for offset in offsets:
                 send_on = event_date - timedelta(days=offset)
 

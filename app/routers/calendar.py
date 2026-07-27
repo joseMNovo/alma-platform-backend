@@ -24,6 +24,7 @@ from app.schemas.email_log import SendEmailRequest
 from app.services import email_service
 from app.services.notification_service import notify_user
 from app.utils.logger import log_info, log_warn, log_error
+from app.utils.timezone import today_ar
 from config import settings
 
 router = APIRouter()
@@ -34,7 +35,7 @@ _TYPE_LABELS = {"grupo": "el grupo de apoyo", "taller": "el taller", "actividad"
 
 def _when_label(event_date: date) -> str:
     """'hoy' / 'mañana' / 'en N días' según cuánto falta para el evento."""
-    days = (event_date - date.today()).days
+    days = (event_date - today_ar()).days
     if days <= 0:
         return "hoy"
     if days == 1:

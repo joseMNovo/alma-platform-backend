@@ -9,3 +9,6 @@ resend
 pywebpush==2.0.0
 # Redimensionado de imágenes al subir (opcional: si falta, se guarda el original)
 Pillow==11.1.0
+# zoneinfo (app/utils/timezone.py) necesita esto en Windows y en Linux "slim"
+# sin tzdata del sistema — sin este paquete, ZoneInfo(...) tira ZoneInfoNotFoundError.
+tzdata
