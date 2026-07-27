@@ -117,23 +117,57 @@ def broadcast(
     # Un solo commit para todas las notificaciones in-app.
     db.commit()
 
-    # Los push van después (uno por usuario); ya persistió la campanita.
-    for user_type, user_id in targets:
-        try:
-            push_sent += send_push_to_user(db, user_type, user_id, title=title, body=body or "", url=url)
-        except Exception:
-            log_error(
-                "Push falló en broadcast (la notificación in-app quedó guardada)",
-                module="notifications",
-                action="broadcast",
-                user=user_id,
-                exc_info=True,
-            )
-
     log_info(
-        "Broadcast enviado",
+        "Broadcast: campanitas creadas",
         module="notifications",
         action="broadcast",
-        meta={"audience": audience, "recipients": recipients, "push_sent": push_sent},
+        meta={"audience": audience, "recipients": recipients},
     )
-    return {"recipients": recipients, "push_sent": push_sent}
+
+    # OJO: los push NO se mandan acá. Cada envío es una llamada HTTPS a un
+    # servicio ajeno (FCM/Apple) y hacerlas en serie dentro del request hacía
+    # que el endpoint tardara ~7s por destinatario y diera timeout con pocos.
+    # El llamador dispara send_broadcast_push() en background; la campanita ya
+    # quedó guardada, así que nadie se pierde el aviso aunque el push falle.
+    return {"recipients": recipients, "push_sent": 0, "targets": targets}
+
+
+def send_broadcast_push(
+    targets: list[tuple[str, int]],
+    title: str,
+    body: str = "",
+    url: Optional[str] = None,
+) -> int:
+    """Manda los push de un broadcast. Pensado para correr en BackgroundTasks.
+
+    Abre su PROPIA sesión: la del request ya se cerró cuando esto se ejecuta.
+    Los destinatarios se procesan en paralelo, y adentro de cada uno los
+    dispositivos también (ver push_service). Con 8s de timeout por dispositivo,
+    un broadcast a toda la organización tarda segundos, no minutos.
+    """
+    from app.database import SessionLocal  # import local: evita ciclo al importar
+
+    db = SessionLocal()
+    push_sent = 0
+    try:
+        for user_type, user_id in targets:
+            try:
+                push_sent += send_push_to_user(db, user_type, user_id, title=title, body=body or "", url=url)
+            except Exception:
+                log_error(
+                    "Push falló en broadcast (la notificación in-app quedó guardada)",
+                    module="notifications",
+                    action="broadcast_push",
+                    user=user_id,
+                    exc_info=True,
+                )
+        log_info(
+            "Broadcast: push enviados",
+            module="notifications",
+            action="broadcast_push",
+            meta={"destinatarios": len(targets), "push_sent": push_sent},
+        )
+    finally:
+        db.close()
+
+    return push_sent

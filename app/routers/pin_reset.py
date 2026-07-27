@@ -68,6 +68,13 @@ def confirm_pin_reset(data: ConfirmPinResetRequest, db: Session = Depends(get_db
     try:
         user.pin_hash = data.new_pin_hash
         token.used_at = datetime.now(timezone.utc)
+        # Fijar el PIN vía el link del mail PRUEBA que la persona controla esa
+        # casilla. Para participantes eso es, literalmente, verificar el email:
+        # así una invitación (que nace con email_verified=False y sin PIN) queda
+        # activada de una sola vez cuando la persona elige su PIN.
+        if data.user_type != "volunteer" and not getattr(user, "email_verified", False):
+            user.email_verified = True
+            user.email_verified_at = datetime.now(timezone.utc)
         db.commit()
         log_info("PIN restablecido correctamente", module="pin_reset", action="confirm_reset", meta={"user_type": data.user_type, "user_id": token.user_id})
     except Exception:

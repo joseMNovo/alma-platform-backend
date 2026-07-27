@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime
@@ -14,7 +14,7 @@ from app.schemas.notification import (
     BroadcastRequest,
     BroadcastResult,
 )
-from app.services.notification_service import broadcast as broadcast_service, notify_user
+from app.services.notification_service import broadcast as broadcast_service, notify_user, send_broadcast_push
 from app.utils.logger import log_info, log_error
 
 router = APIRouter()
@@ -111,8 +111,14 @@ def notify(data: NotificationCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/broadcast", response_model=BroadcastResult, status_code=201)
-def broadcast(data: BroadcastRequest, db: Session = Depends(get_db)):
+def broadcast(data: BroadcastRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Lanza una notificación a una audiencia (campanita + push).
+
+    Responde apenas quedan guardadas las campanitas. Los push salen DESPUÉS,
+    en background: son llamadas HTTPS a servicios ajenos (FCM/Apple) y
+    esperarlas dentro del request hacía que el endpoint tardara segundos por
+    destinatario y terminara en timeout. Nadie se pierde el aviso: la
+    notificación in-app ya está persistida cuando esto devuelve.
 
     Solo lo consume el BFF de Next, que ya validó que sea admin. Si
     also_popup=True, además crea un anuncio (popup al ingresar).
@@ -126,12 +132,22 @@ def broadcast(data: BroadcastRequest, db: Session = Depends(get_db)):
             url=data.url,
             volunteer_ids=data.volunteer_ids,
         )
+        targets = result.pop("targets", [])
 
         popup_created = False
         if data.also_popup:
             db.add(Announcement(title=data.title, body=data.body or data.title, audience=data.audience))
             db.commit()
             popup_created = True
+
+        if targets:
+            background_tasks.add_task(
+                send_broadcast_push,
+                targets,
+                data.title,
+                data.body or "",
+                data.url,
+            )
 
         return {**result, "popup_created": popup_created}
     except Exception:

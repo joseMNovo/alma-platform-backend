@@ -42,15 +42,35 @@ def verify_volunteer_token(db: Session, raw: str) -> VolunteerVerificationToken 
 
 # ── Participant verification ──────────────────────────────────────────
 
-def create_participant_verification_token(db: Session, participant_id: int) -> str:
+def create_participant_verification_token(
+    db: Session, participant_id: int, minutes: int | None = None
+) -> str:
+    """Token de verificación de email. `minutes` permite una ventana más corta
+    que el default general (el registro usa 30 minutos)."""
     raw = generate_raw()
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(minutes=minutes) if minutes else _expiry()
+    )
     db.add(ParticipantVerificationToken(
         participant_id=participant_id,
         token_hash=_hash(raw),
-        expires_at=_expiry(),
+        expires_at=expires_at,
     ))
     db.commit()
     return raw
+
+
+def invalidate_participant_tokens(db: Session, participant_id: int) -> None:
+    """Marca como usados los tokens previos de esa persona.
+
+    Se llama antes de emitir uno nuevo: si alguien pide "reenviar", el link
+    viejo deja de servir. Evita tener varios links vivos a la vez.
+    """
+    db.query(ParticipantVerificationToken).filter(
+        ParticipantVerificationToken.participant_id == participant_id,
+        ParticipantVerificationToken.used_at.is_(None),
+    ).update({"used_at": datetime.now(timezone.utc)}, synchronize_session=False)
+    db.commit()
 
 
 def verify_participant_token(db: Session, raw: str) -> ParticipantVerificationToken | None:

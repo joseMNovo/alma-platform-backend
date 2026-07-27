@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, Text, Boolean, TIMESTAMP, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Date, Text, Boolean, TIMESTAMP, DateTime, ForeignKey, func
 from app.database import Base
 
 
@@ -11,8 +11,10 @@ class Participant(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     email_verified = Column(Boolean, nullable=False, default=False)
     email_verified_at = Column(DateTime, nullable=True)
-    created_at = Column(TIMESTAMP)
-    updated_at = Column(TIMESTAMP)
+    # server_default para que la fecha la ponga MySQL. Sin esto SQLAlchemy
+    # mandaba NULL explícito y created_at quedaba vacío en cada alta.
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
 
 class ParticipantProfile(Base):
@@ -46,8 +48,10 @@ class ParticipantProfile(Base):
     accepts_whatsapp = Column(Boolean, nullable=False, default=False)
     source = Column(String(20))            # 'excel' | 'registro' | 'manual'
     invited_at = Column(DateTime)
-    created_at = Column(TIMESTAMP)
-    updated_at = Column(TIMESTAMP)
+    # server_default: si no, created_at quedaba NULL en cada persona nueva y
+    # rompía el "embudo de cobro" (personas registradas ordenadas por fecha).
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
 
 class ParticipantProgramEnrollment(Base):
@@ -57,4 +61,8 @@ class ParticipantProgramEnrollment(Base):
     participant_id = Column(Integer, ForeignKey("participants.id", ondelete="CASCADE"), nullable=False)
     type = Column(String(20), nullable=False)
     item_id = Column(Integer, nullable=False)
-    enrolled_at = Column(TIMESTAMP)
+    # server_default: SQLAlchemy OMITE la columna en el INSERT y deja que MySQL
+    # aplique el DEFAULT CURRENT_TIMESTAMP. Sin esto mandaba enrolled_at=NULL
+    # explícito y pisaba el default → "cannot be null". Mismo patrón que
+    # calendar_assignments.created_at.
+    enrolled_at = Column(TIMESTAMP, server_default=func.now())

@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import traceback
 import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta
@@ -192,6 +193,44 @@ def release_reservation(conn, event_id: int, volunteer_id: int, offset: int) -> 
 
 # ── Envío de email ─────────────────────────────────────────────────────────
 
+ALERT_EMAIL = "manunovo@gmail.com"
+
+
+def send_cron_alert(reason: str, error_message: str, tb: str = "") -> None:
+    """Avisa por email si el cron falla, para no depender de mirar los logs.
+
+    Usa el mismo endpoint /emails/send que los recordatorios. Limitación
+    honesta: si el backend está caído, esta alerta tampoco puede salir (viaja
+    por el mismo canal). Cubre el 99% de los casos (bug, timeout, error de DB
+    con el backend arriba). Nunca lanza: una alerta que falla no debe tapar el
+    error original.
+    """
+    try:
+        payload = {
+            "to": [ALERT_EMAIL],
+            "subject": "⚠️ Falló el cron de recordatorios — ALMA",
+            "template": "cron_alert",
+            "variables": {
+                "reason": reason,
+                "error_message": error_message or "(sin mensaje)",
+                "traceback": (tb or "Sin traceback.")[-3000:],
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+            "sent_by_volunteer_id": None,
+        }
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            EMAIL_ENDPOINT,
+            data=data,
+            method="POST",
+            headers={"Content-Type": "application/json", "X-API-Key": settings.INTERNAL_API_KEY},
+        )
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as resp:
+            log.info("Alerta de fallo del cron enviada a %s (status %s)", ALERT_EMAIL, resp.status)
+    except Exception:
+        log.exception("No se pudo enviar la alerta de fallo del cron")
+
+
 def send_reminder(row: dict, offset: int) -> bool:
     event_date: date = row["event_date"]
     type_label = TYPE_LABELS.get(row["event_type"], row["event_type"])
@@ -244,6 +283,16 @@ def send_reminder(row: dict, offset: int) -> bool:
     except urllib.error.URLError as exc:
         log.error(
             "Fallo de red al enviar a %s (evento %s, offset %s): %s",
+            row["email"], row["event_id"], offset, exc,
+        )
+        return False
+    except TimeoutError as exc:
+        # En Python 3.12, si el timeout ocurre LEYENDO la respuesta (la conexión
+        # ya se abrió pero Resend tardó), TimeoutError se propaga SIN envolverse
+        # en URLError. Antes escapaba al except del bucle y mataba toda la corrida.
+        # Con este catch, el fallo queda aislado a ese envío y el cron sigue.
+        log.error(
+            "Timeout al enviar a %s (evento %s, offset %s): %s",
             row["email"], row["event_id"], offset, exc,
         )
         return False
@@ -387,9 +436,19 @@ def run() -> int:
 
     except Exception as exc:  # noqa: BLE001
         log.exception("Error inesperado durante la corrida: %s", exc)
+        # Falla catastrófica (la corrida se cortó): alerta con el traceback completo.
+        send_cron_alert("La corrida del cron se cortó por un error inesperado.", str(exc), traceback.format_exc())
         return 1
     finally:
         conn.close()
+
+    # Falla parcial: la corrida terminó, pero algunos envíos fallaron (timeouts,
+    # etc.). Avisamos igual para tener visibilidad, sin traceback (no hubo crash).
+    if failed > 0:
+        send_cron_alert(
+            f"La corrida terminó, pero {failed} recordatorio(s) no se pudieron enviar.",
+            f"Vencidos={due}, enviados={sent}, omitidos={skipped}, fallidos={failed}.",
+        )
 
     log.info(
         "=== alma_cron finalizado | vencidos=%d → enviados=%d, omitidos(ya enviados)=%d, fallidos=%d ===",

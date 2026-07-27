@@ -27,7 +27,11 @@ class CalendarInstanceRich(BaseModel):
     reminder_offsets: Optional[List[int]] = None
     created_by_volunteer_id: Optional[int] = None
     coordinator: Optional[VolunteerRef] = None
+    # co_coordinator (singular) se conserva por compatibilidad; la UI usa la lista.
     co_coordinator: Optional[VolunteerRef] = None
+    co_coordinators: List[VolunteerRef] = []
+    # Conteo real de participantes anotados a ESTE evento (no cancelados).
+    participants_count: int = 0
     volunteers: List[VolunteerRef] = []
 
 

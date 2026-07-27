@@ -1,20 +1,24 @@
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr
+from typing import Optional
 
 
 class RegisterRequest(BaseModel):
+    """Alta de participante. Ya NO se pide un token compartido: la identidad se
+    prueba verificando el email real, que es lo que además deja a ALMA con una
+    casilla válida para comunicarse."""
+
     email: EmailStr
     pin_hash: str    # bcrypt hash generado por el proxy Next.js
-    alma_token: str  # 6 dígitos, validado contra settings
 
-    @field_validator('alma_token')
-    @classmethod
-    def token_6_digits(cls, v):
-        if not v.isdigit() or len(v) != 6:
-            raise ValueError('Token debe tener exactamente 6 dígitos')
-        return v
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
 
 
 class RegisterResponse(BaseModel):
     id: int
     email: str
-    role: str   # "voluntario" | "participante"
+    role: str            # "voluntario" | "participante"
+    email_verified: bool = False
+    # Para que el frontend muestre "revisá tu correo" con el dato correcto.
+    verification_sent_to: Optional[str] = None

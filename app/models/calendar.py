@@ -41,5 +41,7 @@ class CalendarEventParticipant(Base):
     event_id = Column(Integer, ForeignKey("calendar_instances.id", ondelete="CASCADE"), nullable=False)
     participant_id = Column(Integer, ForeignKey("participants.id", ondelete="CASCADE"), nullable=False)
     status = Column(String(20), nullable=False, default="inscripto")
-    created_at = Column(TIMESTAMP)
-    updated_at = Column(TIMESTAMP)
+    # server_default: sin esto SQLAlchemy mandaba NULL y "Anotado" quedaba vacío
+    # (mismo patrón que calendar_assignments / participant_program_enrollments).
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())

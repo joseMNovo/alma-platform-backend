@@ -117,3 +117,27 @@ class ParticipantProgramEnrollment(ParticipantProgramEnrollmentBase):
 
     id: int
     enrolled_at: Optional[datetime] = None
+
+
+# ── Invitación / conversión de personas ───────────────────────────────
+
+class InviteParticipantRequest(BaseModel):
+    """Invita a una persona ya cargada (participant_profiles) a la plataforma:
+    le crea el login de participante y le manda el mail para que elija su PIN."""
+    profile_id: int
+    registered_by_name: Optional[str] = None
+
+
+class RevertVolunteerRequest(BaseModel):
+    """Quita el rol de voluntario/a de una persona y la vuelve participante
+    (reactiva su login previo o le crea uno e invita)."""
+    persona_id: int
+    registered_by_name: Optional[str] = None
+
+
+class ConversionResult(BaseModel):
+    """Resultado de invitar/convertir. `outcome` le dice al front qué toast mostrar."""
+    ok: bool = True
+    outcome: str            # invited | reinvited | reactivated | no_login
+    participant_id: Optional[int] = None
+    email: Optional[str] = None

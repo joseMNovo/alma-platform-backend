@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 
 from app.database import get_db
 from app.models.voluntario import Voluntario as VoluntarioModel
-from app.models.participant import ParticipantProfile as ProfileModel
+from app.models.participant import ParticipantProfile as ProfileModel, Participant as ParticipantModel
 from app.schemas.voluntario import Voluntario, VoluntarioCreate, VoluntarioUpdate, VoluntarioAuth, VoluntarioRegister, VoluntarioEnrollFromDb
 from app.schemas.tokens import VerifyEmailRequest
 from app.schemas.email_log import SendEmailRequest
@@ -45,8 +45,17 @@ def _notify_admins_new_volunteer(db: Session, admin_ids: List[int], vol_display:
 
 @router.get("/auth/{email}", response_model=VoluntarioAuth)
 def get_voluntario_auth(email: str, db: Session = Depends(get_db)):
-    """Endpoint interno para autenticación — devuelve pin_hash."""
-    v = db.query(VoluntarioModel).filter(VoluntarioModel.email == email).first()
+    """Endpoint interno para autenticación — devuelve pin_hash.
+
+    Excluye a los voluntarios 'inactivo' (p. ej. revertidos a participante): si
+    no, seguirían autenticándose como voluntarios con su PIN viejo, ya que el
+    login chequea `voluntarios` ANTES que `participants`. Al dejarlos afuera, el
+    login sigue de largo hasta su cuenta de participante reactivada.
+    """
+    v = db.query(VoluntarioModel).filter(
+        VoluntarioModel.email == email,
+        VoluntarioModel.status != "inactivo",
+    ).first()
     if not v:
         raise HTTPException(status_code=404, detail="Voluntario no encontrado")
     return v
@@ -236,7 +245,11 @@ def enroll_volunteer_from_db(data: VoluntarioEnrollFromDb, background_tasks: Bac
     """Habilita a una persona (o crea una nueva) como voluntario/a desde el
     módulo Base de datos. Crea la ficha en `voluntarios` (status='pendiente'),
     la vincula a la persona maestra y avisa por mail a la persona + a los admins."""
-    if db.query(VoluntarioModel).filter(VoluntarioModel.email == data.email).first():
+    # Una ficha 'inactivo' (persona revertida a participante) NO bloquea: se
+    # puede volver a habilitar reusando esa misma fila. Cualquier otro estado sí
+    # es un choque real de email.
+    existing_vol = db.query(VoluntarioModel).filter(VoluntarioModel.email == data.email).first()
+    if existing_vol is not None and existing_vol.status != "inactivo":
         log_warn("Intento de habilitar voluntario con email ya existente", module="voluntarios", action="enroll_from_db")
         raise HTTPException(status_code=409, detail="Ya existe un voluntario con ese email")
 
@@ -250,20 +263,37 @@ def enroll_volunteer_from_db(data: VoluntarioEnrollFromDb, background_tasks: Bac
             raise HTTPException(status_code=409, detail="La persona ya está vinculada a un voluntario")
 
     try:
-        v = VoluntarioModel(
-            name=data.name,
-            last_name=data.last_name,
-            email=data.email,
-            phone=data.phone,
-            birth_date=data.birth_date,
-            gender=data.gender,
-            age=data.age,
-            registration_date=date.today(),
-            status="pendiente",
-            is_admin=False,
-            email_verified=True,
-        )
-        db.add(v)
+        if existing_vol is not None:
+            # Rehabilitar una ficha que había quedado 'inactivo'. Se reusa la fila
+            # (no se duplica el email) y se limpia el PIN: como toda alta, queda
+            # pendiente y sin poder entrar hasta que un admin la apruebe.
+            v = existing_vol
+            v.name = data.name
+            v.last_name = data.last_name
+            v.phone = data.phone
+            v.birth_date = data.birth_date
+            v.gender = data.gender
+            v.age = data.age
+            v.registration_date = date.today()
+            v.status = "pendiente"
+            v.is_admin = False
+            v.pin_hash = None
+            v.email_verified = True
+        else:
+            v = VoluntarioModel(
+                name=data.name,
+                last_name=data.last_name,
+                email=data.email,
+                phone=data.phone,
+                birth_date=data.birth_date,
+                gender=data.gender,
+                age=data.age,
+                registration_date=date.today(),
+                status="pendiente",
+                is_admin=False,
+                email_verified=True,
+            )
+            db.add(v)
         db.flush()  # obtiene v.id sin cerrar la transacción
 
         # Vincular / crear la persona espejo.
@@ -295,9 +325,47 @@ def enroll_volunteer_from_db(data: VoluntarioEnrollFromDb, background_tasks: Bac
         if not profile.birth_date:
             profile.birth_date = data.birth_date
 
+        # CONVERSIÓN participante → voluntario: si la persona tenía login de
+        # participante, se DESACTIVA (no se borra, para no perder su data). Es
+        # mutuamente excluyente: quien pasa a voluntario deja de ser participante.
+        #
+        # CONTINUIDAD DE ACCESO: si ese participante ya tenía un PIN funcionando,
+        # la ficha de voluntario HEREDA ese PIN y su email verificado, y queda
+        # 'activo' de una. Así la persona cierra sesión y vuelve a entrar con el
+        # MISMO PIN, ahora como voluntaria — sin lockout ni aprobación redundante
+        # (a una persona ya conocida y verificada no tiene sentido volver a
+        # aprobarla). Las altas de voluntarios NUEVOS (sin PIN previo) siguen
+        # 'pendiente' hasta que un admin las apruebe y recién ahí fijen su PIN.
+        converted_participant = False
+        carried_over_login = False
+        part = None
+        if profile.participant_id is not None:
+            part = db.query(ParticipantModel).filter(ParticipantModel.id == profile.participant_id).first()
+        elif data.email:
+            # La persona elegida en Base de Datos puede no ser la fila que quedó
+            # linkeada al login (p. ej. registros duplicados por email). Antes de
+            # resignarnos a un alta 'pendiente', buscamos por email: si hay una
+            # cuenta de participante activa con ese email, la enganchamos igual.
+            part = db.query(ParticipantModel).filter(ParticipantModel.email == data.email).first()
+            if part:
+                profile.participant_id = part.id
+        if part:
+            if part.pin_hash:
+                v.pin_hash = part.pin_hash
+                v.email_verified = True
+                v.email_verified_at = part.email_verified_at or datetime.now(timezone.utc)
+                v.status = "activo"
+                carried_over_login = True
+            if part.is_active:
+                part.is_active = False
+                converted_participant = True
+
         db.commit()
         db.refresh(v)
-        log_info("Voluntario habilitado desde la base de datos", module="voluntarios", action="enroll_from_db", meta={"id": v.id, "persona_id": profile.id})
+        log_info(
+            "Voluntario habilitado desde la base de datos", module="voluntarios", action="enroll_from_db",
+            meta={"id": v.id, "persona_id": profile.id, "convirtio_participante": converted_participant, "hereda_pin": carried_over_login},
+        )
     except HTTPException:
         raise
     except Exception:
@@ -306,6 +374,21 @@ def enroll_volunteer_from_db(data: VoluntarioEnrollFromDb, background_tasks: Bac
         raise
 
     registered_by = (data.registered_by_name or "").strip() or "El equipo de ALMA"
+
+    # Conversión con PIN heredado: la persona ya es voluntaria activa. Un solo
+    # mail de aviso (entra con su PIN de siempre) y NADA de aprobación pendiente.
+    if carried_over_login:
+        background_tasks.add_task(
+            email_service.send_email,
+            db,
+            SendEmailRequest(
+                to=[v.email],
+                subject="Ahora sos voluntario/a — ALMA",
+                template="volunteer_converted",
+                variables={"name": v.name, "registered_by": registered_by, "app_url": settings.APP_BASE_URL},
+            ),
+        )
+        return v
 
     # 1) Mail a la persona: avisarle que quedó pendiente de aprobación.
     background_tasks.add_task(

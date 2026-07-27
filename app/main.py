@@ -24,6 +24,10 @@ from app.routers import (
     pin_reset,
     push,
     notifications,
+    files,
+    capacitaciones,
+    accesos,
+    register,
 )
 
 app = FastAPI(
@@ -67,6 +71,10 @@ app.include_router(emails.router,        prefix="/emails",         tags=["Emails
 app.include_router(pin_reset.router,     prefix="/pin-reset",      tags=["PinReset"],        **common)
 app.include_router(push.router,          prefix="/push",           tags=["Push"],            **common)
 app.include_router(notifications.router, prefix="/notifications",  tags=["Notifications"],   **common)
+app.include_router(files.router,         prefix="/files",          tags=["Files"],           **common)
+app.include_router(capacitaciones.router, prefix="/capacitaciones", tags=["Capacitaciones"], **common)
+app.include_router(accesos.router,       prefix="/accesos",        tags=["Accesos"],         **common)
+app.include_router(register.router,      prefix="/register",       tags=["Register"],        **common)
 
 
 @app.get("/", tags=["Health"])

@@ -55,6 +55,8 @@ logs/*
 
 # markdown files
 *.md
+# ...menos el que documenta la convención de las migraciones
+!sql/LEEME.md
 
 .claude/
 
@@ -65,4 +67,10 @@ init_db.py
 __pycache__/
   *.pyc
 
+# Migraciones SQL: viven todas en sql/ y se corren A MANO.
+# No se versionan; el esquema se recupera del mysqldump del backup.
 *.sql
+sql/*.sql
+
+
+storage/
