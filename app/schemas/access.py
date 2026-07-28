@@ -153,6 +153,8 @@ class AccessAuditOut(BaseModel):
     detail: Optional[dict] = None
     created_at: Optional[datetime] = None
     actor_name: Optional[str] = None
+    person_name: Optional[str] = None
+    resource_label: Optional[str] = None
 
 
 class MyAccess(BaseModel):

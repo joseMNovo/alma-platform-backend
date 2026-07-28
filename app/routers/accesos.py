@@ -262,6 +262,21 @@ def audit_log(
     rows = q.order_by(AccessAudit.created_at.desc()).limit(limit).all()
 
     names = {v.id: f"{v.name or ''} {v.last_name or ''}".strip() for v in db.query(Voluntario).all()}
+
+    # Nombre de persona y título de la capacitación: sin esto la auditoría
+    # queda en "persona #36 · recurso #1", ilegible para el admin.
+    person_ids = {r.person_id for r in rows}
+    person_names = {
+        p.id: f"{p.name or ''} {p.last_name or ''}".strip()
+        for p in db.query(ParticipantProfile).filter(ParticipantProfile.id.in_(person_ids)).all()
+    } if person_ids else {}
+
+    resource_ids = {r.resource_id for r in rows if r.resource_id > 0}
+    training_titles = {
+        t.id: t.title
+        for t in db.query(Training).filter(Training.id.in_(resource_ids)).all()
+    } if resource_ids else {}
+
     return [
         AccessAuditOut(
             id=r.id,
@@ -275,6 +290,8 @@ def audit_log(
             detail=r.detail,
             created_at=r.created_at,
             actor_name=names.get(r.actor_id) or ("Administrador" if r.actor_type == "admin" else None),
+            person_name=person_names.get(r.person_id) or None,
+            resource_label=training_titles.get(r.resource_id) if r.resource_id > 0 else None,
         )
         for r in rows
     ]
