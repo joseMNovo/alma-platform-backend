@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     FILES_MAX_IMAGE_PX: int = 1600
     FILES_IMAGE_QUALITY: int = 82
 
-    VERSION: str = "1.6.1"
+    VERSION: str = "1.6.2"
 
     @property
     def cors_origins_list(self) -> list[str]:
