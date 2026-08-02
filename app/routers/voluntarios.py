@@ -220,8 +220,7 @@ def register_voluntario(data: VoluntarioRegister, background_tasks: BackgroundTa
     vol_display = f"{v.name}{(' ' + v.last_name) if v.last_name else ''}"
 
     background_tasks.add_task(
-        email_service.send_email,
-        db,
+        email_service.send_email_bg,
         SendEmailRequest(
             to=recipients,
             subject="Nueva solicitud de voluntario/a — ALMA",
@@ -379,8 +378,7 @@ def enroll_volunteer_from_db(data: VoluntarioEnrollFromDb, background_tasks: Bac
     # mail de aviso (entra con su PIN de siempre) y NADA de aprobación pendiente.
     if carried_over_login:
         background_tasks.add_task(
-            email_service.send_email,
-            db,
+            email_service.send_email_bg,
             SendEmailRequest(
                 to=[v.email],
                 subject="Ahora sos voluntario/a — ALMA",
@@ -392,8 +390,7 @@ def enroll_volunteer_from_db(data: VoluntarioEnrollFromDb, background_tasks: Bac
 
     # 1) Mail a la persona: avisarle que quedó pendiente de aprobación.
     background_tasks.add_task(
-        email_service.send_email,
-        db,
+        email_service.send_email_bg,
         SendEmailRequest(
             to=[v.email],
             subject="Te sumamos como voluntario/a — ALMA",
@@ -414,8 +411,7 @@ def enroll_volunteer_from_db(data: VoluntarioEnrollFromDb, background_tasks: Bac
     ]
     recipients = admin_emails if admin_emails else [FALLBACK_ADMIN_EMAIL]
     background_tasks.add_task(
-        email_service.send_email,
-        db,
+        email_service.send_email_bg,
         SendEmailRequest(
             to=recipients,
             subject="Nueva solicitud de voluntario/a — ALMA",
@@ -482,8 +478,7 @@ def approve_voluntario(id: int, background_tasks: BackgroundTasks, db: Session =
     pin_reset_url = f"{settings.APP_BASE_URL}/restablecer-pin?token={raw}&type=volunteer"
 
     background_tasks.add_task(
-        email_service.send_email,
-        db,
+        email_service.send_email_bg,
         SendEmailRequest(
             to=[v.email],
             subject="¡Tu cuenta fue aprobada! - ALMA",

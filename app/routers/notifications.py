@@ -88,14 +88,18 @@ def create_notification(data: NotificationCreate, db: Session = Depends(get_db))
 
 
 @router.post("/notify", response_model=NotificationOut, status_code=201)
-def notify(data: NotificationCreate, db: Session = Depends(get_db)):
-    """Crea la notificación in-app de UN usuario Y le dispara el push.
+def notify(data: NotificationCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Crea la notificación in-app de UN usuario y le dispara el push.
 
     Lo consume el cron de recordatorios (alma_cron.py) por HTTP, igual que
-    /emails/send. El push va envuelto en el servicio: nunca hace fallar esto.
+    /emails/send. Responde apenas la campanita queda persistida; el push sale
+    DESPUÉS, en background, por el mismo motivo que en /broadcast: es una llamada
+    HTTPS a un servicio ajeno (FCM/Apple) y esperarla adentro del request le hacía
+    consumir al cron su timeout de a un destinatario por vez. Nadie se pierde el
+    aviso: la notificación in-app ya está guardada cuando esto devuelve.
     """
     try:
-        return notify_user(
+        notif = notify_user(
             db,
             user_type=data.user_type,
             user_id=data.user_id,
@@ -103,11 +107,23 @@ def notify(data: NotificationCreate, db: Session = Depends(get_db)):
             body=data.body or "",
             kind=data.kind,
             url=data.url,
+            push=False,
         )
     except Exception:
         db.rollback()
         log_error("Error en notify", module="notifications", action="notify", exc_info=True)
         raise
+
+    # Reusa el helper del broadcast con un solo destinatario: ya abre su propia
+    # sesión y se traga los fallos de push (la campanita no depende de él).
+    background_tasks.add_task(
+        send_broadcast_push,
+        [(data.user_type, data.user_id)],
+        data.title,
+        data.body or "",
+        data.url,
+    )
+    return notif
 
 
 @router.post("/broadcast", response_model=BroadcastResult, status_code=201)

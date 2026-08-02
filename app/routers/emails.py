@@ -13,6 +13,11 @@ router = APIRouter()
 
 @router.post("/send", response_model=EmailLogOut, status_code=201)
 def send_email(req: SendEmailRequest, db: Session = Depends(get_db)):
+    """Manda el email y devuelve el EmailLog ya resuelto ('sent' o 'failed').
+
+    Espera a Resend, así que la respuesta tarda lo que tarde Resend. Quien llame
+    por HTTP tiene que darle timeout de sobra: `alma_cron.py` usa 90s por esto.
+    """
     try:
         result = email_service.send_email(db, req)
         log_info("Email enviado", module="emails", action="send_email", meta={"template": req.template, "to_count": len(req.to)})

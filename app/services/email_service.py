@@ -3,8 +3,10 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from config import settings
+from app.database import SessionLocal
 from app.models.email_log import EmailLog
 from app.schemas.email_log import SendEmailRequest
+from app.utils.logger import log_error
 
 
 _BASE = """\
@@ -396,14 +398,16 @@ def _render(template: str | None, variables: dict, body: str | None) -> str:
     return _BASE.replace("{{body_html}}", html_body)
 
 
-def send_email(db: Session, req: SendEmailRequest) -> EmailLog:
+def _deliver_to_resend(req: SendEmailRequest) -> tuple[str, str | None, str | None]:
+    """Entrega el mail por Resend. Devuelve (status, resend_id, error_message).
+
+    NUNCA lanza: un fallo de Resend se refleja en el status, no rompe al llamador.
+    Esta es la parte lenta (depende de un tercero); todo lo que la llame de forma
+    directa se bloquea hasta que Resend conteste.
+    """
     resend.api_key = settings.RESEND_API_KEY
 
     html = _render(req.template, req.variables or {}, req.body)
-
-    status = "sent"
-    resend_id = None
-    error_message = None
 
     try:
         params: dict = {
@@ -418,12 +422,20 @@ def send_email(db: Session, req: SendEmailRequest) -> EmailLog:
             params["bcc"] = req.bcc
 
         response = resend.Emails.send(params)
-        resend_id = response.get("id")
+        return "sent", response.get("id"), None
     except Exception as e:
-        status = "failed"
-        error_message = str(e)
+        return "failed", None, str(e)
 
-    log = EmailLog(
+
+def _build_log(
+    req: SendEmailRequest,
+    status: str,
+    resend_id: str | None = None,
+    error_message: str | None = None,
+) -> EmailLog:
+    return EmailLog(
+        # `sent_at` es el momento del INTENTO: se fija igual para 'sent' y para
+        # 'failed' (es la columna por la que ordena `GET /emails/logs`).
         sent_at=datetime.now(timezone.utc),
         from_address=settings.MAIL_FROM,
         to_addresses=req.to,
@@ -437,7 +449,43 @@ def send_email(db: Session, req: SendEmailRequest) -> EmailLog:
         error_message=error_message,
         variables=req.variables,
     )
+
+
+def send_email(db: Session, req: SendEmailRequest) -> EmailLog:
+    """Envío SÍNCRONO: espera a Resend y devuelve el EmailLog ya resuelto.
+
+    Bloquea al llamador todo lo que tarde Resend. Desde un request HTTP eso hay
+    que tenerlo en cuenta: quien llame de afuera necesita un timeout generoso
+    (`alma_cron.py` usa 90s). Para disparar y olvidarse está `send_email_bg`.
+    """
+    status, resend_id, error_message = _deliver_to_resend(req)
+
+    log = _build_log(req, status, resend_id, error_message)
     db.add(log)
     db.commit()
     db.refresh(log)
     return log
+
+
+def send_email_bg(req: SendEmailRequest) -> None:
+    """`send_email` para usar con BackgroundTasks: abre su PROPIA sesión.
+
+    Desde FastAPI 0.106 las dependencias con `yield` se cierran ANTES de que
+    corran las tareas de background, así que la sesión del request ya no sirve
+    acá. Nunca lanza: una tarea de background que revienta no tiene a nadie que
+    la escuche.
+    """
+    db = SessionLocal()
+    try:
+        send_email(db, req)
+    except Exception:
+        db.rollback()
+        log_error(
+            "Fallo al registrar el email enviado en background",
+            module="emails", action="send_email_bg",
+            meta={"template": req.template, "to_count": len(req.to)}, exc_info=True,
+        )
+    finally:
+        db.close()
+
+

@@ -29,7 +29,13 @@ class ParticipantProfile(Base):
     volunteer_id = Column(Integer, ForeignKey("voluntarios.id", ondelete="SET NULL"), nullable=True, unique=True)
     name = Column(String(100))
     last_name = Column(String(100))
-    email = Column(String(255))            # identidad de la persona (índice único en BD)
+    # Identidad de la persona: dos filas con el mismo email serían dos registros
+    # de alguien que en realidad es uno solo. El índice ya existe en MySQL
+    # (uq_participant_profiles_email, ver sql/personas.sql), pero faltaba
+    # declararlo acá: sin esto SQLAlchemy no lo conoce y el 409 por duplicado del
+    # router quedaba dependiendo de que la base lo atajara sola.
+    # MySQL y SQLite admiten varios NULL, así que se puede cargar gente sin email.
+    email = Column(String(255), unique=True)
     cuit = Column(String(13))
     is_member = Column(Boolean, nullable=False, default=False)  # socio/a de ALMA
     is_volunteer = Column(Boolean, nullable=False, default=False)  # voluntario/a de ALMA (flag descriptivo)
