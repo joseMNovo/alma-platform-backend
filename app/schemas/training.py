@@ -11,6 +11,23 @@ VALID_STATUS = {"borrador", "publicada", "archivada"}
 VALID_ACCESS_MODES = {"grant", "abierta"}
 
 
+def clean_payment_url(v: Optional[str]) -> Optional[str]:
+    """Normaliza el link de pago y rechaza esquemas que no sean http(s).
+
+    Este valor termina en el href de un botón público. Sin este filtro, un
+    `javascript:...` guardado desde el ABM se ejecutaría en el navegador de
+    quien visita la landing.
+    """
+    if v is None:
+        return None
+    v = v.strip()
+    if not v:
+        return None
+    if not re.match(r"^https?://", v, re.IGNORECASE):
+        raise ValueError("El link de pago tiene que empezar con http:// o https://")
+    return v[:500]
+
+
 def slugify(value: str) -> str:
     """Título → slug para la URL pública (/capacitaciones/<slug>)."""
     normalized = unicodedata.normalize("NFKD", value or "")
@@ -116,9 +133,13 @@ class TrainingBase(BaseModel):
     cover_file_guid: Optional[str] = None
     price: Decimal = Decimal("0")
     currency: str = "ARS"
+    payment_url: Optional[str] = None
     status: str = "borrador"
     access_mode: str = "grant"
     default_access_days: Optional[int] = None
+    # Carga horaria del certificado ("8 horas"). Vacío = el certificado no la
+    # menciona (el texto tiene ese tramo como opcional).
+    certificate_hours: Optional[str] = None
     category: Optional[str] = None
     available_from: Optional[datetime] = None
     available_until: Optional[datetime] = None
@@ -155,6 +176,11 @@ class TrainingBase(BaseModel):
             return v if v else None
         return None
 
+    @field_validator("payment_url")
+    @classmethod
+    def payment_url_valid(cls, v: Optional[str]) -> Optional[str]:
+        return clean_payment_url(v)
+
 
 class TrainingCreate(TrainingBase):
     slug: Optional[str] = None  # si no viene, se genera del título
@@ -168,13 +194,20 @@ class TrainingUpdate(BaseModel):
     cover_file_guid: Optional[str] = None
     price: Optional[Decimal] = None
     currency: Optional[str] = None
+    payment_url: Optional[str] = None
     status: Optional[str] = None
     access_mode: Optional[str] = None
     default_access_days: Optional[int] = None
+    certificate_hours: Optional[str] = None
     category: Optional[str] = None
     available_from: Optional[datetime] = None
     available_until: Optional[datetime] = None
     sort_order: Optional[int] = None
+
+    @field_validator("payment_url")
+    @classmethod
+    def payment_url_valid(cls, v: Optional[str]) -> Optional[str]:
+        return clean_payment_url(v)
 
     @field_validator("status")
     @classmethod
@@ -207,9 +240,17 @@ class TrainingOut(BaseModel):
     cover_file_guid: Optional[str] = None
     price: Decimal = Decimal("0")
     currency: str = "ARS"
+    # Público a propósito: es el href del botón "Comprar" de la landing. Ya
+    # viene resuelto: el propio si tiene, si no el general de la organización.
+    payment_url: Optional[str] = None
+    # Solo el propio (sin heredar). Lo usa la pantalla de administración.
+    own_payment_url: Optional[str] = None
     status: str
     access_mode: str
     default_access_days: Optional[int] = None
+    # Carga horaria del certificado ("8 horas"). Vacío = el certificado no la
+    # menciona (el texto tiene ese tramo como opcional).
+    certificate_hours: Optional[str] = None
     category: Optional[str] = None
     available_from: Optional[datetime] = None
     available_until: Optional[datetime] = None

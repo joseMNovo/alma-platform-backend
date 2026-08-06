@@ -37,6 +37,8 @@ class ParticipantProfile(Base):
     # MySQL y SQLite admiten varios NULL, así que se puede cargar gente sin email.
     email = Column(String(255), unique=True)
     cuit = Column(String(13))
+    # Documento. Se imprime en el certificado de finalización.
+    dni = Column(String(15))
     is_member = Column(Boolean, nullable=False, default=False)  # socio/a de ALMA
     is_volunteer = Column(Boolean, nullable=False, default=False)  # voluntario/a de ALMA (flag descriptivo)
     phone = Column(String(50))

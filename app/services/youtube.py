@@ -7,7 +7,7 @@ Dos cosas, ambas sin API key ni credenciales:
    Se guarda SOLO el ID, así migrar a otro proveedor es cambiar provider + ref.
 
 2. check_embeddable(): pregunta por oEmbed si el video se puede embeber.
-   Un video subido como "Privado" NO se puede embeber y el alumno vería un
+   Un video subido como "Privado" NO se puede embeber y la persona vería un
    cuadro negro. Este chequeo lo detecta EN EL MOMENTO de cargarlo, que es
    el error operativo más probable de todo el módulo.
 """

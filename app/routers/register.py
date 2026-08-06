@@ -20,6 +20,8 @@ LINK-BY-EMAIL: si la persona ya existe en `participant_profiles` (importada
 del Excel o cargada a mano) y todavía no tiene login, se le ADJUNTA la cuenta
 en vez de crear un duplicado.
 """
+from urllib.parse import quote
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -50,7 +52,7 @@ def _expiry_label() -> str:
     return f"{minutes} minutos"
 
 
-def send_verification_email(participant_id: int, email: str, name: str | None = None) -> None:
+def send_verification_email(participant_id: int, email: str, name: str | None = None, next_path: str | None = None) -> None:
     """Emite un token nuevo y manda el mail de verificación.
 
     Corre en background con su PROPIA sesión: la del request ya se cerró.
@@ -63,6 +65,10 @@ def send_verification_email(participant_id: int, email: str, name: str | None = 
             db, participant_id, minutes=settings.PARTICIPANT_VERIFICATION_MINUTES
         )
         url = f"{settings.APP_BASE_URL}/verificar-email?token={raw}&type=participant"
+        # Volver a la compra después de verificar. Solo rutas internas de
+        # capacitaciones: el frontend lo revalida antes de navegar.
+        if next_path and next_path.startswith("/capacitacion/") and not next_path.startswith("//"):
+            url += f"&next={quote(next_path, safe='/')}"
 
         email_service.send_email(
             db,
@@ -194,11 +200,19 @@ def register_participante(
 
         if profile:
             profile.participant_id = participant.id
+            # Si la ficha vieja no tenía nombre y ahora lo dieron, se completa;
+            # nunca se pisa lo que ya estaba cargado.
+            if not (profile.name or "").strip() and (data.name or "").strip():
+                profile.name = data.name.strip()
+            if not (profile.last_name or "").strip() and (data.last_name or "").strip():
+                profile.last_name = data.last_name.strip()
             linked = True
         else:
             profile = ParticipantProfile(
                 participant_id=participant.id,
                 email=email,
+                name=(data.name or "").strip() or None,
+                last_name=(data.last_name or "").strip() or None,
                 source="registro",
                 accepts_notifications=False,
                 accepts_whatsapp=False,
@@ -225,7 +239,7 @@ def register_participante(
     )
 
     name = (profile.name or "").strip() or None
-    background_tasks.add_task(send_verification_email, participant.id, email, name)
+    background_tasks.add_task(send_verification_email, participant.id, email, name, data.next)
     background_tasks.add_task(_notify_admins_new_participant, email)
 
     return RegisterResponse(

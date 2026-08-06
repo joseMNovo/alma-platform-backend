@@ -43,15 +43,18 @@ def _notify_granted(db: Session, person: ParticipantProfile, module_key: str, re
         return
 
     title = "Ya tenés acceso"
-    # "Formación" es el grupo del nav; "Capacitaciones" es la pestaña adentro.
-    body = "Entrá a Formación → Capacitaciones para ver el contenido."
+    # "Contenido" es el grupo del nav; "Capacitaciones" es la pestaña adentro.
+    body = "Entrá a Contenido → Capacitaciones para ver el contenido."
     url = "/capacitaciones"
 
     if module_key == "capacitaciones" and resource_id:
         training = db.query(Training).filter(Training.id == resource_id).first()
         if training:
-            title = f"Ya tenés acceso a {training.title}"
-            body = "Entrá a Formación → Capacitaciones para empezar."
+            # El título corto y el nombre en el cuerpo: la campanita recorta
+            # los títulos largos y "Ya tenés acceso a Capacitación de pru…" no
+            # dice nada. El cuerpo tiene lugar de sobra.
+            title = "Ya tenés acceso"
+            body = f"«{training.title}» ya está disponible. Entrá a Contenido → Capacitaciones."
 
     try:
         notify_user(
@@ -159,7 +162,7 @@ def resource_grants(
     only_live: bool = Query(True),
     db: Session = Depends(get_db),
 ):
-    """Quiénes tienen acceso a un recurso. Es la lista de alumnos."""
+    """Quiénes tienen acceso a un recurso. Es la lista de personas con acceso."""
     q = db.query(PersonAccessGrant).filter(
         PersonAccessGrant.module_key == module_key,
         PersonAccessGrant.resource_id == resource_id,

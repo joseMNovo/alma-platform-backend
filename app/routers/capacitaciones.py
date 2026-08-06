@@ -27,7 +27,7 @@ from app.schemas.training import (
     SharedAccountAlert, VideoCheckRequest, VideoCheckResult,
     slugify,
 )
-from app.services import access_service, youtube
+from app.services import access_service, settings_service, youtube
 from app.utils.logger import log_info, log_warn, log_error
 
 router = APIRouter()
@@ -103,6 +103,7 @@ def _serialize_training(
     progress: Optional[dict] = None,
     include_items: bool = False,
     only_published_items: bool = True,
+    payment_fallback: Optional[str] = None,
 ) -> dict:
     progress = progress or {}
     items = [i for i in training.items if i.is_published or not only_published_items]
@@ -115,9 +116,22 @@ def _serialize_training(
         "cover_file_guid": training.cover_file_guid,
         "price": training.price,
         "currency": training.currency,
+        # Público: es el href del botón "Comprar". No es un secreto — es un
+        # link de cobro que ALMA reparte por Instagram igual que la landing.
+        #
+        # El de la capacitación manda; si no tiene, se usa el general de la
+        # organización (app_settings). Así el link se carga UNA vez y las
+        # excepciones —una capacitación con otro precio— siguen siendo posibles.
+        "payment_url": training.payment_url or payment_fallback,
+        # Lo que tiene cargado ESTA capacitación, sin el general. Lo necesita
+        # la pantalla de administración para distinguir "no tiene, hereda" de
+        # "tiene el suyo".
+        "own_payment_url": training.payment_url,
         "status": training.status,
         "access_mode": training.access_mode,
         "default_access_days": training.default_access_days,
+        # Lo que sale en el {{horas}} del certificado.
+        "certificate_hours": training.certificate_hours,
         "category": training.category,
         "available_from": training.available_from,
         "available_until": training.available_until,
@@ -182,6 +196,7 @@ def list_trainings(
         q = q.filter(Training.status == status)
 
     trainings = q.order_by(Training.sort_order, Training.title).all()
+    fallback = settings_service.get(db, settings_service.PAYMENT_URL_KEY)
 
     result = []
     for t in trainings:
@@ -193,6 +208,7 @@ def list_trainings(
                 expires_at=expires_at,
                 progress=_progress_map(db, person_id, t.id) if include_items else None,
                 include_items=include_items,
+                payment_fallback=fallback,
             )
         )
     return result
@@ -211,6 +227,7 @@ def my_trainings(
         .order_by(Training.sort_order, Training.title)
         .all()
     )
+    fallback = settings_service.get(db, settings_service.PAYMENT_URL_KEY)
 
     result = []
     for t in trainings:
@@ -222,9 +239,34 @@ def my_trainings(
                 expires_at=expires_at,
                 progress=_progress_map(db, person_id, t.id),
                 include_items=True,
+                payment_fallback=fallback,
             )
         )
     return result
+
+
+@router.get("/publicas", response_model=List[TrainingOut])
+def public_catalog(db: Session = Depends(get_db)):
+    """Catálogo PÚBLICO (sin sesión) para la academia: /academia.
+
+    Devuelve las publicadas con lo justo para armar la tarjeta —portada,
+    título, precio, cantidad de módulos— y SIN ítems: el temario se ve al
+    entrar a la landing de cada una.
+
+    Va declarado antes que /{training_id} a propósito: FastAPI resuelve por
+    orden y "publicas" no parsea como int.
+    """
+    trainings = (
+        db.query(Training)
+        .filter(Training.status == "publicada")
+        .order_by(Training.sort_order, Training.title)
+        .all()
+    )
+    fallback = settings_service.get(db, settings_service.PAYMENT_URL_KEY)
+    return [
+        _serialize_training(t, has_access=False, include_items=False, payment_fallback=fallback)
+        for t in trainings
+    ]
 
 
 @router.get("/publica/{slug}", response_model=TrainingOut)
@@ -236,7 +278,12 @@ def public_landing(slug: str, db: Session = Depends(get_db)):
     training = db.query(Training).filter(Training.slug == slug, Training.status == "publicada").first()
     if not training:
         raise HTTPException(status_code=404, detail="Capacitación no encontrada")
-    return _serialize_training(training, has_access=False, include_items=True)
+    return _serialize_training(
+        training,
+        has_access=False,
+        include_items=True,
+        payment_fallback=settings_service.get(db, settings_service.PAYMENT_URL_KEY),
+    )
 
 
 @router.get("/{training_id}", response_model=TrainingOut)
@@ -256,6 +303,7 @@ def get_training(
         progress=_progress_map(db, person_id, training.id),
         include_items=True,
         only_published_items=not include_unpublished,
+        payment_fallback=settings_service.get(db, settings_service.PAYMENT_URL_KEY),
     )
 
 
@@ -326,7 +374,7 @@ def check_video(data: VideoCheckRequest):
     """Valida el link de YouTube ANTES de guardarlo y trae el título.
 
     Detecta el error más probable del módulo: subir el video como "Privado".
-    Los privados no se pueden embeber y el alumno vería un cuadro negro.
+    Los privados no se pueden embeber y la persona vería un cuadro negro.
     """
     video_id = youtube.extract_video_id(data.url)
     if not video_id:

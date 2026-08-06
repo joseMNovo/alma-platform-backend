@@ -44,6 +44,21 @@ PURPOSES: dict[str, dict] = {
         "max_mb": 5,
         "max_px": None,  # None = usa FILES_MAX_IMAGE_PX
     },
+    "certificate_logo": {
+        "label": "Logo del certificado",
+        "mimes": {"image/jpeg", "image/png", "image/webp"},
+        "max_mb": 3,
+        # Va impreso a ~55 mm de ancho: más de 1200 px no aporta nada al PDF
+        # y solo lo engorda.
+        "max_px": 1200,
+    },
+    "certificate_signature": {
+        "label": "Firma del certificado",
+        # PNG con fondo transparente es lo que mejor queda sobre la hoja.
+        "mimes": {"image/jpeg", "image/png", "image/webp"},
+        "max_mb": 3,
+        "max_px": 1200,
+    },
 }
 
 # Magic bytes → mime real. Es la verificación que impide que suban un .php

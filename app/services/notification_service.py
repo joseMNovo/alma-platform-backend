@@ -77,6 +77,26 @@ def _audience_targets(db: Session, audience: str) -> list[tuple[str, int]]:
     return targets
 
 
+def emails_de(db: Session, targets: list[tuple[str, int]]) -> list[str]:
+    """Direcciones de una lista de (user_type, user_id), sin repetidos.
+
+    Una misma persona puede ser voluntaria y participante con el mismo mail; sin
+    deduplicar recibiría el anuncio dos veces.
+    """
+    ids_voluntarios = [i for t, i in targets if t == "voluntario"]
+    ids_participantes = [i for t, i in targets if t == "participante"]
+
+    correos: list[str] = []
+    if ids_voluntarios:
+        filas = db.query(Voluntario.email).filter(Voluntario.id.in_(ids_voluntarios)).all()
+        correos += [f.email for f in filas]
+    if ids_participantes:
+        filas = db.query(Participant.email).filter(Participant.id.in_(ids_participantes)).all()
+        correos += [f.email for f in filas]
+
+    return list(dict.fromkeys(c.strip().lower() for c in correos if c and c.strip()))
+
+
 def broadcast(
     db: Session,
     title: str,
@@ -85,11 +105,15 @@ def broadcast(
     url: Optional[str] = None,
     kind: str = "announcement",
     volunteer_ids: Optional[list[int]] = None,
+    crear_campanitas: bool = True,
 ) -> dict:
     """Envía una notificación a una audiencia o a voluntarios puntuales.
 
     Si volunteer_ids trae IDs, se envía SOLO a esos voluntarios; si no, se usa
     'audience'. Crea la fila in-app de cada usuario y dispara el push.
+
+    Con crear_campanitas=False resuelve los destinatarios pero NO crea nada:
+    sirve cuando el aviso va solo por mail o solo como popup.
 
     Devuelve {recipients, push_sent}. Un fallo puntual de push no corta el
     broadcast (cada usuario va envuelto).
@@ -102,20 +126,21 @@ def broadcast(
     recipients = 0
     push_sent = 0
 
-    for user_type, user_id in targets:
-        notif = Notification(
-            user_type=user_type,
-            user_id=user_id,
-            title=title,
-            body=body or None,
-            kind=kind,
-            url=url,
-        )
-        db.add(notif)
-        recipients += 1
+    if crear_campanitas:
+        for user_type, user_id in targets:
+            notif = Notification(
+                user_type=user_type,
+                user_id=user_id,
+                title=title,
+                body=body or None,
+                kind=kind,
+                url=url,
+            )
+            db.add(notif)
+            recipients += 1
 
-    # Un solo commit para todas las notificaciones in-app.
-    db.commit()
+        # Un solo commit para todas las notificaciones in-app.
+        db.commit()
 
     log_info(
         "Broadcast: campanitas creadas",

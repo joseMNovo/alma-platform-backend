@@ -15,6 +15,8 @@ class PersonaBase(BaseModel):
     last_name: Optional[str] = None
     email: Optional[str] = None
     cuit: Optional[str] = None
+    # Se imprime en el certificado de finalización.
+    dni: Optional[str] = None
     is_member: bool = False
     birth_date: Optional[date] = None
     address: Optional[str] = None
@@ -40,6 +42,7 @@ class PersonaUpdate(BaseModel):
     last_name: Optional[str] = None
     email: Optional[str] = None
     cuit: Optional[str] = None
+    dni: Optional[str] = None
     is_member: Optional[bool] = None
     birth_date: Optional[date] = None
     address: Optional[str] = None

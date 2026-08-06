@@ -22,15 +22,26 @@ class Training(Base):
     cover_file_guid = Column(String(36), nullable=True)
     price = Column(Numeric(10, 2), nullable=False, default=0)
     currency = Column(String(3), nullable=False, default="ARS")
+    # Link de pago externo (MercadoPago), generado a mano en el panel de MP.
+    # La plataforma NO se entera del pago: manda afuera y la habilitación la
+    # sigue dando un admin. NULL = no se muestra botón de compra.
+    payment_url = Column(String(500), nullable=True)
     status = Column(String(20), nullable=False, default="borrador")
     # 'grant' = requiere habilitación | 'abierta' = contenido gratuito para
     # cualquier autenticado, sin habilitar persona por persona.
     access_mode = Column(String(20), nullable=False, default="grant")
     default_access_days = Column(Integer, nullable=True)
+    # Carga horaria tal como se imprime en el certificado ("8 horas"). Texto y
+    # no número: la escribe quien dicta el curso y es lo que sale impreso.
+    certificate_hours = Column(String(40), nullable=True)
     category = Column(String(60), nullable=True)
     available_from = Column(DateTime, nullable=True)
     available_until = Column(DateTime, nullable=True)
     sort_order = Column(Integer, nullable=False, default=0)
+    # Plantilla de certificado propia. NULL = la marcada como default.
+    certificate_template_id = Column(
+        Integer, ForeignKey("certificate_templates.id", ondelete="SET NULL"), nullable=True
+    )
     created_by_volunteer_id = Column(
         Integer, ForeignKey("voluntarios.id", ondelete="SET NULL"), nullable=True
     )

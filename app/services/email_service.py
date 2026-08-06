@@ -1,3 +1,4 @@
+import html as html_lib
 import resend
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
@@ -350,6 +351,18 @@ _BODIES: dict[str, str] = {
   Nos vemos pronto. 💙 ALMA
 </p>""",
 
+    # Aviso escrito por un admin desde "Anuncios". El texto lo pone quien
+    # escribe, así que va a `{{message}}` con los saltos de línea ya
+    # convertidos a <br> (ver send_announcement_emails).
+    "announcement": """\
+<h1 style="margin:0 0 16px;color:#9A8BC2;font-size:28px;font-weight:700;line-height:1.3;
+           font-family:'Nunito Sans',Arial,sans-serif;">
+  {{title}}
+</h1>
+<p style="margin:0;color:#6B6B6B;font-size:15px;line-height:1.8;font-weight:300;text-align:left;">
+  {{message}}
+</p>""",
+
     # Alerta técnica interna (NO va a usuarios) — avisa si el cron falla.
     "cron_alert": """\
 <h1 style="margin:0 0 16px;color:#C0392B;font-size:24px;font-weight:700;line-height:1.3;
@@ -487,5 +500,48 @@ def send_email_bg(req: SendEmailRequest) -> None:
         )
     finally:
         db.close()
+
+
+# Resend acepta hasta 50 direcciones por envío. Se manda de a 45 para dejar
+# lugar al `to` y no quedar al filo del límite.
+_TAMANO_LOTE = 45
+
+
+def send_announcement_emails(
+    emails: list[str],
+    subject: str,
+    title: str,
+    message: str,
+    sent_by_volunteer_id: int | None = None,
+) -> None:
+    """Manda un anuncio por mail a una lista de direcciones. Para background.
+
+    Va con copia oculta y en lotes: en un anuncio a toda la organización, poner
+    a todo el mundo en el `to` filtraría la lista de contactos de ALMA a
+    cualquiera que lo reciba.
+
+    El texto lo escribe una persona en un textarea, así que se escapa el HTML y
+    recién ahí se convierten los saltos de línea: sin eso, un `<` en el mensaje
+    rompe el mail (y peor, deja inyectar etiquetas).
+    """
+    limpios = [e.strip() for e in emails if e and e.strip()]
+    if not limpios:
+        return
+
+    cuerpo = html_lib.escape(message).replace("\n", "<br>")
+    variables = {"title": html_lib.escape(title), "message": cuerpo}
+
+    for i in range(0, len(limpios), _TAMANO_LOTE):
+        lote = limpios[i : i + _TAMANO_LOTE]
+        send_email_bg(
+            SendEmailRequest(
+                to=[settings.MAIL_FROM],
+                bcc=lote,
+                subject=subject,
+                template="announcement",
+                variables=variables,
+                sent_by_volunteer_id=sent_by_volunteer_id,
+            )
+        )
 
 

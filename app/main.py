@@ -10,7 +10,6 @@ from app.routers import (
     grupos,
     actividades,
     pendientes,
-    pagos,
     inventario,
     inscripciones,
     calendar,
@@ -26,6 +25,10 @@ from app.routers import (
     notifications,
     files,
     capacitaciones,
+    certificados,
+    configuracion,
+    encuestas,
+    recordatorios,
     accesos,
     register,
 )
@@ -57,7 +60,6 @@ app.include_router(talleres.router,      prefix="/talleres",      tags=["Tallere
 app.include_router(grupos.router,        prefix="/grupos",         tags=["Grupos"],         **common)
 app.include_router(actividades.router,   prefix="/actividades",   tags=["Actividades"],    **common)
 app.include_router(pendientes.router,    prefix="/pendientes",    tags=["Pendientes"],     **common)
-app.include_router(pagos.router,         prefix="/pagos",          tags=["Pagos"],          **common)
 app.include_router(inventario.router,    prefix="/inventario",    tags=["Inventario"],     **common)
 app.include_router(inscripciones.router, prefix="/inscripciones", tags=["Inscripciones"],  **common)
 app.include_router(calendar.router,      prefix="/calendar",      tags=["Calendar"],       **common)
@@ -73,6 +75,10 @@ app.include_router(push.router,          prefix="/push",           tags=["Push"]
 app.include_router(notifications.router, prefix="/notifications",  tags=["Notifications"],   **common)
 app.include_router(files.router,         prefix="/files",          tags=["Files"],           **common)
 app.include_router(capacitaciones.router, prefix="/capacitaciones", tags=["Capacitaciones"], **common)
+app.include_router(certificados.router,  prefix="/certificados",   tags=["Certificados"],    **common)
+app.include_router(configuracion.router, prefix="/configuracion",  tags=["Configuracion"],   **common)
+app.include_router(encuestas.router,     prefix="/encuestas",      tags=["Encuestas"],       **common)
+app.include_router(recordatorios.router, prefix="/recordatorios",  tags=["Recordatorios"],   **common)
 app.include_router(accesos.router,       prefix="/accesos",        tags=["Accesos"],         **common)
 app.include_router(register.router,      prefix="/register",       tags=["Register"],        **common)
 

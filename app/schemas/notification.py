@@ -64,8 +64,14 @@ class BroadcastRequest(BaseModel):
     body: str = ""
     audience: str = "all"
     url: Optional[str] = None
-    # Si True, además crea un anuncio (popup al ingresar) para esa audiencia.
-    also_popup: bool = False
+    # Vías de aviso. Se combinan: el mismo texto puede ir a la campanita, salir
+    # como popup al ingresar y mandarse por mail.
+    notify: bool = True          # campanita + push
+    also_popup: bool = False     # anuncio emergente al ingresar
+    send_email: bool = False     # mail a los destinatarios
+    # Solo se usan si send_email=True. Si vienen vacíos, se cae al title/body.
+    email_subject: Optional[str] = None
+    email_body: Optional[str] = None
     # Si viene una lista de IDs de voluntarios, se envía SOLO a esos (ignora
     # 'audience' para elegir destinatarios). Si es None/vacía, se usa 'audience'.
     volunteer_ids: Optional[List[int]] = None
@@ -89,3 +95,4 @@ class BroadcastResult(BaseModel):
     recipients: int  # cuántos usuarios recibieron la notificación in-app
     push_sent: int   # cuántos envíos push efectivos (dispositivos)
     popup_created: bool
+    emails_queued: int = 0  # a cuántas direcciones se les encoló el mail

@@ -12,3 +12,6 @@ Pillow==11.1.0
 # zoneinfo (app/utils/timezone.py) necesita esto en Windows y en Linux "slim"
 # sin tzdata del sistema — sin este paquete, ZoneInfo(...) tira ZoneInfoNotFoundError.
 tzdata
+# Certificados en PDF (app/services/certificate_pdf.py). Python puro: no
+# necesita GTK ni librerías del sistema, por eso se eligió sobre WeasyPrint.
+reportlab==4.2.5

@@ -14,7 +14,13 @@ from app.schemas.notification import (
     BroadcastRequest,
     BroadcastResult,
 )
-from app.services.notification_service import broadcast as broadcast_service, notify_user, send_broadcast_push
+from app.services.notification_service import (
+    broadcast as broadcast_service,
+    emails_de,
+    notify_user,
+    send_broadcast_push,
+)
+from app.services.email_service import send_announcement_emails
 from app.utils.logger import log_info, log_error
 
 router = APIRouter()
@@ -147,6 +153,7 @@ def broadcast(data: BroadcastRequest, background_tasks: BackgroundTasks, db: Ses
             audience=data.audience,
             url=data.url,
             volunteer_ids=data.volunteer_ids,
+            crear_campanitas=data.notify,
         )
         targets = result.pop("targets", [])
 
@@ -156,7 +163,9 @@ def broadcast(data: BroadcastRequest, background_tasks: BackgroundTasks, db: Ses
             db.commit()
             popup_created = True
 
-        if targets:
+        # El push solo tiene sentido si hay campanita: es el timbre de la misma
+        # notificación.
+        if targets and data.notify:
             background_tasks.add_task(
                 send_broadcast_push,
                 targets,
@@ -165,7 +174,22 @@ def broadcast(data: BroadcastRequest, background_tasks: BackgroundTasks, db: Ses
                 data.url,
             )
 
-        return {**result, "popup_created": popup_created}
+        # El mail también sale en background: son llamadas a Resend y esperarlas
+        # dentro del request haría timeout con una audiencia grande.
+        emails_queued = 0
+        if data.send_email and targets:
+            correos = emails_de(db, targets)
+            emails_queued = len(correos)
+            if correos:
+                background_tasks.add_task(
+                    send_announcement_emails,
+                    correos,
+                    (data.email_subject or data.title).strip(),
+                    data.title,
+                    (data.email_body or data.body or "").strip(),
+                )
+
+        return {**result, "popup_created": popup_created, "emails_queued": emails_queued}
     except Exception:
         db.rollback()
         log_error("Error en broadcast", module="notifications", action="broadcast", exc_info=True)

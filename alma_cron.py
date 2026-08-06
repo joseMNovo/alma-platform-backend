@@ -418,6 +418,193 @@ def send_reminder_push(row: dict, offset: int) -> None:
         log.warning("  (el mail salió, pero la notificación al celular no: %s)", exc)
 
 
+# ── Recordatorios de PARTICIPANTES ─────────────────────────────────────────
+#
+# Los de arriba son para voluntarios: los prende el admin por evento con
+# `calendar_instances.reminder_offsets`, y salen para todos los asignados.
+#
+# Estos son distintos: los pide CADA PERSONA para CADA evento al que se
+# anotó (participant_event_reminders). Por eso no miran `notify_enabled` —
+# ese switch es del admin y gobierna a los voluntarios. Acá el pedido de la
+# persona ES el permiso.
+#
+# Registro de envíos aparte (participant_reminder_sent_log) para no tocar el
+# de voluntarios, que es el que ya viene funcionando.
+
+def fetch_participant_candidates(conn, today: date) -> list[dict]:
+    """Eventos futuros con los recordatorios que pidió cada participante.
+
+    Se descarta a quien no tenga email: sin dirección no hay nada que mandar,
+    y contarlo como "fallido" ensuciaría el resumen todos los días.
+    """
+    sql = """
+        SELECT
+            ci.id            AS event_id,
+            ci.type          AS event_type,
+            ci.date          AS event_date,
+            ci.start_time    AS start_time,
+            ci.notes         AS notes,
+            ci.created_at    AS created_at,
+            r.offsets        AS reminder_offsets,
+            p.id             AS person_id,
+            p.participant_id AS participant_id,
+            p.name           AS name,
+            p.last_name      AS last_name,
+            p.email          AS email
+        FROM participant_event_reminders r
+        JOIN calendar_instances ci    ON ci.id = r.calendar_instance_id
+        JOIN participant_profiles p   ON p.id = r.person_id
+        WHERE ci.date >= %s
+          AND p.email IS NOT NULL
+          AND p.email <> ''
+        ORDER BY ci.date ASC, ci.id ASC
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (today,))
+        return cur.fetchall()
+
+
+def already_sent_participant(conn, event_id: int, person_id: int, offset: int) -> bool:
+    """Reserva atómica: devuelve True si ESTE aviso ya se había mandado.
+
+    Igual que con los voluntarios, el INSERT IGNORE contra la clave única es
+    lo que hace idempotente al cron: si corre dos veces el mismo día, o si se
+    saltea un día, cada aviso sale UNA sola vez.
+    """
+    sql = """
+        INSERT IGNORE INTO participant_reminder_sent_log (event_id, person_id, offset_days, sent_on)
+        VALUES (%s, %s, %s, %s)
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (event_id, person_id, offset, today_ar()))
+        inserted = cur.rowcount
+    conn.commit()
+    return inserted == 0
+
+
+def release_reservation_participant(conn, event_id: int, person_id: int, offset: int) -> None:
+    """Si el envío falla, se libera la reserva para reintentar mañana."""
+    sql = """
+        DELETE FROM participant_reminder_sent_log
+        WHERE event_id = %s AND person_id = %s AND offset_days = %s
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (event_id, person_id, offset))
+    conn.commit()
+
+
+def run_participantes(conn, today: date) -> dict:
+    """Corre la tanda de participantes. Devuelve los contadores para el resumen.
+
+    Comparte send_reminder() con los voluntarios: las filas se arman con las
+    mismas claves a propósito, así el texto del mail es uno solo y no se
+    desincroniza.
+    """
+    contadores = {"sent": 0, "skipped": 0, "failed": 0, "unknown": 0}
+
+    candidates = fetch_participant_candidates(conn, today)
+    if not candidates:
+        log.info("Participantes: nadie pidió recordatorios para eventos futuros.")
+        return contadores
+
+    log.info(
+        "Participantes: reviso %s en %s.",
+        _plural(len({r["person_id"] for r in candidates}), "persona", "personas"),
+        _plural(len({r["event_id"] for r in candidates}), "evento", "eventos"),
+    )
+
+    for row in candidates:
+        offsets = parse_offsets(row["reminder_offsets"])
+        if not offsets:
+            continue
+
+        event_date: date = row["event_date"]
+        created_at = row.get("created_at")
+        created_date = to_ar_date(created_at) if isinstance(created_at, datetime) else None
+
+        for offset in offsets:
+            send_on = event_date - timedelta(days=offset)
+
+            if today < send_on:
+                continue
+
+            # Ventana obsoleta: el evento se cargó después del día en que
+            # correspondía este aviso.
+            if created_date is not None and send_on < created_date:
+                log.debug("Participante · fuera de ventana: %s", _describe(row, offset))
+                continue
+
+            if already_sent_participant(conn, row["event_id"], row["person_id"], offset):
+                contadores["skipped"] += 1
+                log.debug("Participante · ya se había enviado: %s", _describe(row, offset))
+                continue
+
+            outcome, motivo = send_reminder(row, offset)
+            if outcome == ACCEPTED:
+                contadores["sent"] += 1
+                log.info("✓ Participante · %s", _describe(row, offset))
+                send_participant_push(row, offset)
+            elif outcome == REJECTED:
+                # Sabemos que no salió: liberar la reserva no puede duplicar nada.
+                release_reservation_participant(conn, row["event_id"], row["person_id"], offset)
+                contadores["failed"] += 1
+                log.error(
+                    "✗ Participante · NO salió: %s. Motivo: %s. Lo reintento mañana.",
+                    _describe(row, offset), motivo,
+                )
+            else:  # UNKNOWN
+                # NO se libera: el mail pudo haber salido igual y reintentarlo
+                # sería mandarlo dos veces.
+                contadores["unknown"] += 1
+                log.error(
+                    "? Participante · SIN CONFIRMAR: %s. Motivo: %s. Puede haber salido "
+                    "igual, así que NO lo reintento.",
+                    _describe(row, offset), motivo,
+                )
+
+    return contadores
+
+
+def send_participant_push(row: dict, offset: int) -> None:
+    """Campanita + push del participante. Nunca corta la corrida.
+
+    Va DESPUÉS del email y aislado: si el push falla, el recordatorio por mail
+    ya salió y quedó registrado igual.
+    """
+    participant_id = row.get("participant_id")
+    if not participant_id:
+        return  # la persona no tiene cuenta: no hay a quién notificar
+
+    type_label = TYPE_LABELS.get(row["event_type"], row["event_type"])
+    when_label = OFFSET_LABELS.get(offset, f"en {offset} días")
+
+    payload = {
+        "user_type": "participante",
+        "user_id": int(participant_id),
+        "title": f"{type_label} {row['event_date'].strftime('%d/%m')}",
+        "body": f"Te anotaste y es {when_label}.",
+        "kind": "calendar_reminder",
+        "url": "/calendarios",
+    }
+
+    request = urllib.request.Request(
+        NOTIFY_ENDPOINT,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Key": settings.INTERNAL_API_KEY,
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as resp:
+            if resp.status != 201:
+                log.warning("  (el mail salió, pero la notificación al celular no: respondió %s)", resp.status)
+    except Exception as exc:  # noqa: BLE001 — el push nunca debe romper el cron
+        log.warning("  (el mail salió, pero la notificación al celular no: %s)", exc)
+
+
 # ── Orquestación ───────────────────────────────────────────────────────────
 
 def run() -> int:
@@ -500,6 +687,15 @@ def run() -> int:
                     log.error("? SIN CONFIRMAR: %s. Motivo: %s. Puede haber salido igual, "
                               "así que NO lo reintento (evita mandarlo duplicado).",
                               _describe(row, offset), motivo)
+
+        # Segunda tanda: los recordatorios que pidió cada participante.
+        # Va adentro del mismo try/conn para compartir conexión y para que un
+        # error acá también dispare la alerta.
+        participantes = run_participantes(conn, today)
+        sent += participantes["sent"]
+        skipped += participantes["skipped"]
+        failed += participantes["failed"]
+        unknown += participantes["unknown"]
 
     except Exception as exc:  # noqa: BLE001
         log.exception("Se cortó la corrida por un error inesperado: %s", exc)
