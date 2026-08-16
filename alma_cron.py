@@ -28,6 +28,7 @@ Todo queda logueado en logs/cron/alma_cron.log y en stdout.
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import sys
@@ -58,6 +59,24 @@ TYPE_LABELS: dict[str, str] = {
     "taller": "Taller",
     "actividad": "Actividad",
 }
+
+# Cómo se nombra el evento en la primera línea del mail. Varía por DOS ejes:
+#
+#   • quién lo recibe: al voluntario se lo asignaron, el participante se anotó
+#     solo. Decirle "asignada" a quien se inscribió por su cuenta es falso.
+#   • el tipo: en castellano el género manda. "un taller asignado" pero "una
+#     actividad asignada". Por eso varía la frase COMPLETA (artículo +
+#     sustantivo + participio) y no solo la palabra "asignada": partirla en
+#     pedazos garantiza que tarde o temprano concuerden mal.
+EVENT_PHRASES: dict[str, dict[str, str]] = {
+    "grupo":     {"voluntario": "un grupo de apoyo asignado", "participante": "un grupo de apoyo"},
+    "taller":    {"voluntario": "un taller asignado",         "participante": "un taller"},
+    "actividad": {"voluntario": "una actividad asignada",     "participante": "una actividad"},
+}
+
+# Audiencias válidas para EVENT_PHRASES.
+VOLUNTARIO = "voluntario"
+PARTICIPANTE = "participante"
 
 EMAIL_ENDPOINT = f"http://{settings.API_HOST}:{settings.API_PORT}/emails/send"
 NOTIFY_ENDPOINT = f"http://{settings.API_HOST}:{settings.API_PORT}/notifications/notify"
@@ -127,15 +146,49 @@ def _human_date(d: date) -> str:
     return f"{DAY_NAMES[d.weekday()]} {d.strftime('%d/%m/%Y')}"
 
 
+def _event_name(row: dict) -> str:
+    """Cómo se llama el encuentro, para mostrárselo a una persona.
+
+    El nombre sale del programa de origen (grupo/taller/actividad) y lo resuelve
+    la query. Cuando no hay ninguno —evento suelto, sin `source_id` ni `title`—
+    se cae al tipo ("Taller"), que es lo único cierto que sabemos. Nunca
+    devuelve vacío: este texto va al asunto del mail.
+    """
+    return (row.get("event_name") or "").strip() or TYPE_LABELS.get(
+        row["event_type"], row["event_type"]
+    )
+
+
+def _event_phrase(row: dict, audience: str) -> str:
+    """"un taller asignado" / "una actividad" — ver EVENT_PHRASES."""
+    por_tipo = EVENT_PHRASES.get(row["event_type"], EVENT_PHRASES["actividad"])
+    return por_tipo.get(audience, por_tipo[VOLUNTARIO])
+
+
+def _when_sentence(row: dict, offset: int) -> str:
+    """'Es mañana (29/07/2026 a las 18:00 hs).' — cuerpo de la campanita.
+
+    Mismo formato que arma el recordatorio manual del calendario, así el aviso
+    se lee igual lo dispare el cron o una persona.
+    """
+    when_label = OFFSET_LABELS.get(offset, f"en {offset} días")
+    cuando = row["event_date"].strftime("%d/%m/%Y")
+    start_time = str(row["start_time"])[:5] if row["start_time"] is not None else ""
+    if start_time:
+        cuando += f" a las {start_time} hs"
+    return f"Es {when_label} ({cuando})."
+
+
 def _describe(row: dict, offset: int) -> str:
     """Una línea que identifica el recordatorio sin jerga ni IDs.
 
-    Ej.: 'Victoria Rébori — Taller 29/07 (es mañana)'.
+    Ej.: 'Victoria Rébori — Estimulación cognitiva 29/07 (es mañana)'. Si el
+    evento no tiene nombre propio, queda el tipo: 'Victoria Rébori — Taller
+    29/07 (es mañana)'.
     """
     full_name = f"{row['name']} {row['last_name'] or ''}".strip()
-    type_label = TYPE_LABELS.get(row["event_type"], row["event_type"])
     when_label = OFFSET_LABELS.get(offset, f"en {offset} días")
-    return f"{full_name} — {type_label} {row['event_date'].strftime('%d/%m')} (es {when_label})"
+    return f"{full_name} — {_event_name(row)} {row['event_date'].strftime('%d/%m')} (es {when_label})"
 
 
 def _plural(n: int, singular: str, plural: str) -> str:
@@ -162,6 +215,12 @@ def fetch_candidates(conn, today: date) -> list[dict]:
     Eventos futuros (o de hoy) con notificación activada, junto con cada voluntario
     asignado que tenga email. Incluye coordinador, co-coordinador y la lista N
     (cualquier fila en calendar_assignments).
+
+    `event_name` sale del programa de origen: `ci.title` casi siempre viene NULL,
+    así que el nombre real está en grupos/talleres/actividades y se alcanza por
+    `source_id`. Mismo COALESCE que usa el calendario y el recordatorio manual
+    (`/instances/{id}/notify`), para que el evento se llame igual en todos lados.
+    Los LEFT JOIN no multiplican filas: los tres van contra la PK de su tabla.
     """
     sql = """
         SELECT
@@ -172,6 +231,7 @@ def fetch_candidates(conn, today: date) -> list[dict]:
             ci.notes         AS notes,
             ci.reminder_offsets AS reminder_offsets,
             ci.created_at    AS created_at,
+            COALESCE(ci.title, g.name, t.name, a.name) AS event_name,
             ca.role          AS role,
             v.id             AS volunteer_id,
             v.name           AS name,
@@ -180,6 +240,9 @@ def fetch_candidates(conn, today: date) -> list[dict]:
         FROM calendar_instances ci
         JOIN calendar_assignments ca ON ca.instance_id = ci.id
         JOIN voluntarios v           ON v.id = ca.volunteer_id
+        LEFT JOIN grupos      g ON ci.type = 'grupo'     AND g.id = ci.source_id
+        LEFT JOIN talleres    t ON ci.type = 'taller'    AND t.id = ci.source_id
+        LEFT JOIN actividades a ON ci.type = 'actividad' AND a.id = ci.source_id
         WHERE ci.notify_enabled = 1
           AND ci.date >= %s
           AND v.email IS NOT NULL
@@ -278,7 +341,7 @@ def send_cron_alert(reason: str, error_message: str, tb: str = "") -> None:
         log.exception("Tampoco pude mandarte el mail de aviso")
 
 
-def send_reminder(row: dict, offset: int) -> tuple[str, str]:
+def send_reminder(row: dict, offset: int, audience: str = VOLUNTARIO) -> tuple[str, str]:
     """Manda el recordatorio. Devuelve (resultado, motivo).
 
     resultado es ACCEPTED / REJECTED / UNKNOWN; motivo es un texto corto para el
@@ -287,25 +350,44 @@ def send_reminder(row: dict, offset: int) -> tuple[str, str]:
     reminder_sent_log solo se libera con REJECTED, el único caso donde SABEMOS
     que no salió ningún mail.
 
+    `audience` decide cómo se nombra el evento en la primera línea (ver
+    EVENT_PHRASES): al voluntario se lo asignaron, el participante se anotó.
+    Es lo ÚNICO que cambia entre las dos tandas; el resto del mail es idéntico
+    a propósito, para que no se desincronicen.
+
     Quien loguea el resultado es run(), para que todas las líneas salgan con el
     mismo formato.
     """
     event_date: date = row["event_date"]
     type_label = TYPE_LABELS.get(row["event_type"], row["event_type"])
+    event_name = _event_name(row)
     when_label = OFFSET_LABELS.get(offset, f"en {offset} días")
     start_time = str(row["start_time"])[:5] if row["start_time"] is not None else ""
 
+    # Cuando el evento no tiene nombre propio, _event_name ya devolvió el tipo:
+    # repetirlo arriba dejaría un recuadro que dice "TALLER / Taller". En ese
+    # caso la etiqueta se manda vacía y el recuadro arranca directo en el nombre.
+    has_own_name = bool((row.get("event_name") or "").strip())
+
+    # _render() hace un str.replace pelado, sin escapar: un "&" o un "<" en un
+    # nombre cargado a mano llegaría crudo al HTML del mail. Se escapa acá todo
+    # lo que sea texto libre. El asunto NO se escapa: es una cabecera, no HTML,
+    # y ahí "&amp;" se leería literal.
     variables = {
-        "name": row["name"] or "",
-        "event_label": type_label,
+        "name": html.escape(row["name"] or ""),
+        "event_label": type_label if has_own_name else "",
+        "event_name": html.escape(event_name),
+        "event_phrase": _event_phrase(row, audience),
         "event_date": event_date.strftime("%d/%m/%Y"),
         "event_time": start_time,
         "when_label": when_label,
-        "notes": row["notes"] or "",
+        "notes": html.escape(row["notes"] or ""),
         "app_url": settings.APP_BASE_URL,
     }
 
-    subject = f"Recordatorio: {type_label} {when_label} ({event_date.strftime('%d/%m')})"
+    # El nombre va PRIMERO: en el celular el asunto se corta a los ~35
+    # caracteres, y lo que tiene que sobrevivir al corte es qué es, no cuándo.
+    subject = f"Recordatorio: {event_name} — {when_label} ({event_date.strftime('%d/%m')})"
 
     payload = {
         "to": [row["email"]],
@@ -379,22 +461,11 @@ def send_reminder_push(row: dict, offset: int) -> None:
     Best-effort y totalmente aislado del email: cualquier fallo se loguea y se
     ignora. No afecta contadores ni el flujo de recordatorios por email.
     """
-    event_date: date = row["event_date"]
-    type_label = TYPE_LABELS.get(row["event_type"], row["event_type"])
-    when_label = OFFSET_LABELS.get(offset, f"en {offset} días")
-    start_time = str(row["start_time"])[:5] if row["start_time"] is not None else ""
-
-    title = f"Recordatorio: {type_label} {when_label}"
-    body_parts = [f"{event_date.strftime('%d/%m/%Y')}"]
-    if start_time:
-        body_parts.append(f"{start_time} hs")
-    body = " · ".join(body_parts)
-
     payload = {
         "user_type": "voluntario",
         "user_id": row["volunteer_id"],
-        "title": title,
-        "body": body,
+        "title": f"Recordatorio: {_event_name(row)}",
+        "body": _when_sentence(row, offset),
         "kind": "calendar_reminder",
         "url": "/calendarios",
     }
@@ -445,6 +516,7 @@ def fetch_participant_candidates(conn, today: date) -> list[dict]:
             ci.start_time    AS start_time,
             ci.notes         AS notes,
             ci.created_at    AS created_at,
+            COALESCE(ci.title, g.name, t.name, a.name) AS event_name,
             r.offsets        AS reminder_offsets,
             p.id             AS person_id,
             p.participant_id AS participant_id,
@@ -454,6 +526,9 @@ def fetch_participant_candidates(conn, today: date) -> list[dict]:
         FROM participant_event_reminders r
         JOIN calendar_instances ci    ON ci.id = r.calendar_instance_id
         JOIN participant_profiles p   ON p.id = r.person_id
+        LEFT JOIN grupos      g ON ci.type = 'grupo'     AND g.id = ci.source_id
+        LEFT JOIN talleres    t ON ci.type = 'taller'    AND t.id = ci.source_id
+        LEFT JOIN actividades a ON ci.type = 'actividad' AND a.id = ci.source_id
         WHERE ci.date >= %s
           AND p.email IS NOT NULL
           AND p.email <> ''
@@ -498,7 +573,8 @@ def run_participantes(conn, today: date) -> dict:
 
     Comparte send_reminder() con los voluntarios: las filas se arman con las
     mismas claves a propósito, así el texto del mail es uno solo y no se
-    desincroniza.
+    desincroniza. Lo único que cambia es la audiencia (PARTICIPANTE), que decide
+    si el evento está "asignado" o no.
     """
     contadores = {"sent": 0, "skipped": 0, "failed": 0, "unknown": 0}
 
@@ -539,7 +615,7 @@ def run_participantes(conn, today: date) -> dict:
                 log.debug("Participante · ya se había enviado: %s", _describe(row, offset))
                 continue
 
-            outcome, motivo = send_reminder(row, offset)
+            outcome, motivo = send_reminder(row, offset, PARTICIPANTE)
             if outcome == ACCEPTED:
                 contadores["sent"] += 1
                 log.info("✓ Participante · %s", _describe(row, offset))
@@ -575,14 +651,11 @@ def send_participant_push(row: dict, offset: int) -> None:
     if not participant_id:
         return  # la persona no tiene cuenta: no hay a quién notificar
 
-    type_label = TYPE_LABELS.get(row["event_type"], row["event_type"])
-    when_label = OFFSET_LABELS.get(offset, f"en {offset} días")
-
     payload = {
         "user_type": "participante",
         "user_id": int(participant_id),
-        "title": f"{type_label} {row['event_date'].strftime('%d/%m')}",
-        "body": f"Te anotaste y es {when_label}.",
+        "title": f"Recordatorio: {_event_name(row)}",
+        "body": f"Te anotaste. {_when_sentence(row, offset)}",
         "kind": "calendar_reminder",
         "url": "/calendarios",
     }
@@ -664,7 +737,7 @@ def run() -> int:
                     log.debug("Ya se había enviado en otra corrida: %s", _describe(row, offset))
                     continue
 
-                outcome, motivo = send_reminder(row, offset)
+                outcome, motivo = send_reminder(row, offset, VOLUNTARIO)
                 if outcome == ACCEPTED:
                     sent += 1
                     log.info("✓ %s", _describe(row, offset))

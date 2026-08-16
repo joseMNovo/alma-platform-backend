@@ -80,6 +80,11 @@ class TrainingItem(Base):
     duration_minutes = Column(Integer, nullable=True)
     sort_order = Column(Integer, nullable=False, default=0)
     is_published = Column(Boolean, nullable=False, default=True)
+    # La introducción abierta: este ítem —y solo este— se ve sin haber pagado
+    # y sin tener cuenta, desde la landing pública. Es el anzuelo comercial.
+    # La regla se aplica en _serialize_item (routers/capacitaciones.py), que es
+    # la única función que decide qué contenido viaja al browser.
+    is_free_preview = Column(Boolean, nullable=False, default=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 

@@ -177,6 +177,97 @@ def test_manda_el_template_y_los_datos_correctos(monkeypatch, fila):
     assert capturado["headers"]["X-api-key"]
 
 
+def _capturar_payload(monkeypatch) -> dict:
+    """Devuelve un dict que, tras llamar al cron, contiene el payload enviado."""
+    capturado: dict = {}
+
+    def _falso(request, timeout=None):
+        capturado.update(json.loads(request.data))
+        return RespuestaFalsa()
+
+    monkeypatch.setattr(alma_cron.urllib.request, "urlopen", _falso)
+    return capturado
+
+
+# ── Cómo se llama el encuentro ─────────────────────────────────────────────
+# Lo pidió una usuaria: el mail decía solo "Actividad" y había que abrirlo para
+# saber de qué se trataba.
+
+def test_el_asunto_dice_como_se_llama_el_encuentro(monkeypatch, fila):
+    fila["event_name"] = "Estimulación cognitiva"
+    payload = _capturar_payload(monkeypatch)
+
+    alma_cron.send_reminder(fila, 7)
+
+    assert payload["subject"] == "Recordatorio: Estimulación cognitiva — en una semana (29/07)"
+    assert payload["variables"]["event_name"] == "Estimulación cognitiva"
+    assert payload["variables"]["event_label"] == "Taller"
+
+
+def test_el_nombre_va_antes_que_el_cuando(monkeypatch, fila):
+    """En el celular el asunto se corta a los ~35 caracteres. Lo que tiene que
+    sobrevivir al corte es QUÉ es, no cuándo."""
+    fila["event_name"] = "Estimulación cognitiva"
+    payload = _capturar_payload(monkeypatch)
+
+    alma_cron.send_reminder(fila, 7)
+
+    asunto = payload["subject"]
+    assert asunto.index("Estimulación cognitiva") < asunto.index("en una semana")
+
+
+def test_evento_sin_nombre_propio_cae_al_tipo(monkeypatch, fila):
+    """Evento suelto, sin source_id ni title: el mail sale igual, con el tipo
+    como nombre. La etiqueta de arriba va VACÍA para que no se lea
+    'TALLER / Taller'."""
+    fila["event_name"] = None
+    payload = _capturar_payload(monkeypatch)
+
+    alma_cron.send_reminder(fila, 1)
+
+    assert payload["variables"]["event_name"] == "Taller"
+    assert payload["variables"]["event_label"] == ""
+    assert payload["subject"] == "Recordatorio: Taller — mañana (29/07)"
+
+
+@pytest.mark.parametrize("tipo,audiencia,esperado", [
+    ("taller",    alma_cron.VOLUNTARIO,   "un taller asignado"),
+    ("taller",    alma_cron.PARTICIPANTE, "un taller"),
+    ("actividad", alma_cron.VOLUNTARIO,   "una actividad asignada"),
+    ("actividad", alma_cron.PARTICIPANTE, "una actividad"),
+    ("grupo",     alma_cron.VOLUNTARIO,   "un grupo de apoyo asignado"),
+    ("grupo",     alma_cron.PARTICIPANTE, "un grupo de apoyo"),
+])
+def test_la_frase_concuerda_con_quien_recibe_y_con_el_genero(
+    monkeypatch, fila, tipo, audiencia, esperado,
+):
+    """Dos ejes a la vez: al voluntario se lo asignaron y el participante se
+    anotó solo; y el género lo manda el tipo ("un taller asignado" pero "una
+    actividad asignada"). Por eso varía la frase entera y no la palabra suelta.
+    """
+    fila["event_type"] = tipo
+    payload = _capturar_payload(monkeypatch)
+
+    alma_cron.send_reminder(fila, 1, audiencia)
+
+    assert payload["variables"]["event_phrase"] == esperado
+
+
+def test_el_texto_libre_se_escapa(monkeypatch, fila):
+    """_render() del backend hace un str.replace pelado, sin escapar: un '&' o
+    un '<' cargado a mano llegaría crudo al HTML del mail."""
+    fila["event_name"] = "Memoria & Movimiento"
+    fila["notes"] = "Sala <2>"
+    payload = _capturar_payload(monkeypatch)
+
+    alma_cron.send_reminder(fila, 1)
+
+    assert payload["variables"]["event_name"] == "Memoria &amp; Movimiento"
+    assert payload["variables"]["notes"] == "Sala &lt;2&gt;"
+    # El asunto es una cabecera, no HTML: ahí "&amp;" se leería literal.
+    assert "Memoria & Movimiento" in payload["subject"]
+
+
 def test_el_timeout_es_generoso():
     """Con 20s se pasaba mientras Resend todavía respondía, y eso disparaba el
     ciclo de alerta falsa + duplicado. No bajarlo sin releer send_reminder()."""
@@ -205,6 +296,13 @@ def test_la_descripcion_se_entiende_sola(fila):
     assert alma_cron._describe(fila, 1) == "Victoria Rébori — Taller 29/07 (es mañana)"
     assert alma_cron._describe(fila, 7) == "Victoria Rébori — Taller 29/07 (es en una semana)"
     assert alma_cron._describe(fila, 0) == "Victoria Rébori — Taller 29/07 (es hoy)"
+
+
+def test_la_descripcion_usa_el_nombre_del_encuentro(fila):
+    """El log de la mañana también gana con el nombre: 'Taller 29/07' no dice
+    cuál de los talleres era."""
+    fila["event_name"] = "Estimulación cognitiva"
+    assert alma_cron._describe(fila, 1) == "Victoria Rébori — Estimulación cognitiva 29/07 (es mañana)"
 
 
 def test_la_descripcion_aguanta_apellido_vacio(fila):

@@ -41,6 +41,7 @@ tienen `ALTER` que fallan si ya se aplicaron (revisar antes de repetir).
 | 16 | `16_certificados_emitidos.sql` | `certificates` — los certificados entregados, con el texto congelado y el código de verificación |
 | 17 | `17_recordatorios_participantes.sql` | `participant_event_reminders` + `participant_reminder_sent_log` (cada participante elige sus avisos por evento) |
 | 18 | `18_encuestas_justificacion.sql` | Agrega `survey_questions.explanation` (el porqué de la respuesta, se muestra al terminar) |
+| 19 | `19_training_items_intro_gratis.sql` | Agrega `training_items.is_free_preview` (el video de introducción que se ve sin pagar y sin cuenta, en la landing pública) |
 
 `15_encuestas.sql` va **antes** que `16_certificados_emitidos.sql`: un certificado
 referencia el intento de evaluación que lo habilitó.

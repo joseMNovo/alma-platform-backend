@@ -60,7 +60,7 @@ os.environ["DB_NAME"] = "no_existe_a_proposito"
 os.environ["DB_USER"] = "nadie"
 os.environ["DB_PASSWORD"] = ""
 
-from sqlalchemy import create_engine, event  # noqa: E402
+from sqlalchemy import BigInteger, create_engine, event  # noqa: E402
 from sqlalchemy.dialects import mysql  # noqa: E402
 from sqlalchemy.ext.compiler import compiles  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
@@ -89,6 +89,15 @@ for _tipo_mysql in (mysql.MEDIUMTEXT, mysql.LONGTEXT, mysql.TINYTEXT):
     compiles(_tipo_mysql, "sqlite")(lambda element, compiler, **kw: "TEXT")
 
 compiles(mysql.TINYINT, "sqlite")(lambda element, compiler, **kw: "INTEGER")
+
+# BigInteger como clave primaria (hoy training_item_views.id): en SQLite SOLO
+# `INTEGER PRIMARY KEY` es alias de rowid y se autoincrementa. Con BIGINT el id
+# queda en NULL y el INSERT falla — y como el router de reproducciones se traga
+# el error para no romperle el video a nadie, la fila simplemente no se escribía
+# y el test que solo miraba el código HTTP daba verde igual. En MySQL
+# `BIGINT AUTO_INCREMENT` funciona sin esto: es una limitación de SQLite, no del
+# modelo. SQLite guarda enteros de 64 bits igual, así que no se pierde rango.
+compiles(BigInteger, "sqlite")(lambda element, compiler, **kw: "INTEGER")
 
 
 

@@ -50,6 +50,8 @@ class TrainingItemBase(BaseModel):
     duration_minutes: Optional[int] = None
     sort_order: int = 0
     is_published: bool = True
+    # Introducción abierta: se ve sin pagar y sin cuenta (ver el modelo).
+    is_free_preview: bool = False
 
     @field_validator("title")
     @classmethod
@@ -82,6 +84,7 @@ class TrainingItemUpdate(BaseModel):
     duration_minutes: Optional[int] = None
     sort_order: Optional[int] = None
     is_published: Optional[bool] = None
+    is_free_preview: Optional[bool] = None
 
     @field_validator("kind")
     @classmethod
@@ -111,6 +114,10 @@ class TrainingItemOut(BaseModel):
     duration_minutes: Optional[int] = None
     sort_order: int = 0
     is_published: bool = True
+    # Marca la introducción abierta. Viaja SIEMPRE (también a quien no tiene
+    # acceso): es justamente lo que la vidriera necesita para ofrecer "ver la
+    # intro" en vez de un candado.
+    is_free_preview: bool = False
     locked: bool = False
     # Progreso de quien consulta (None si no aplica)
     last_position_sec: Optional[int] = None
@@ -257,6 +264,12 @@ class TrainingOut(BaseModel):
     sort_order: int = 0
     created_by_volunteer_id: Optional[int] = None
     item_count: int = 0
+    # True si alguno de sus ítems publicados es la introducción abierta. Lo
+    # usan las vidrieras, que listan capacitaciones sin traer los ítems.
+    has_free_preview: bool = False
+    # Veces que se miró la vista previa sin sesión. None = no se pidió calcular
+    # (solo lo hace la pantalla de administración); 0 = no la miró nadie.
+    free_preview_views: Optional[int] = None
     # Contexto de quien consulta
     has_access: bool = False
     access_expires_at: Optional[datetime] = None

@@ -35,6 +35,10 @@ router = APIRouter()
 MODULE_KEY = "capacitaciones"
 # Porcentaje de reproducción real a partir del cual un video se da por visto.
 COMPLETION_RATIO = 0.9
+# Identidad de quien mira la introducción abierta sin tener cuenta. No hay a
+# quién atribuirle la vista, pero sí queremos contarla: sin esto no hay forma
+# de saber si el anzuelo funciona. Se guarda con person_id NULL.
+ANON_USER_TYPE = "anonimo"
 
 
 # ── Helpers ────────────────────────────────────────────────────────────
@@ -69,10 +73,44 @@ def _progress_map(db: Session, person_id: Optional[int], training_id: int) -> di
     return {r.training_item_id: r for r in rows}
 
 
+def _preview_view_counts(db: Session) -> dict[int, int]:
+    """Cuántas veces se miró la vista previa de cada capacitación.
+
+    UNA sola consulta agregada para todas: pedirlo capacitación por
+    capacitación sería un N+1 sobre `training_item_views`, que crece con cada
+    reproducción. Aprovecha `idx_views_item`.
+
+    Solo cuenta las visitas ANÓNIMAS, que son las que responden la pregunta que
+    motivó todo esto: si el anzuelo pica. Una reproducción con persona
+    identificada es alguien que ya está adentro y no dice nada sobre eso.
+    """
+    rows = (
+        db.query(TrainingItem.training_id, func.count(TrainingItemView.id))
+        .join(TrainingItemView, TrainingItemView.training_item_id == TrainingItem.id)
+        .filter(
+            TrainingItem.is_free_preview.is_(True),
+            TrainingItemView.user_type == ANON_USER_TYPE,
+        )
+        .group_by(TrainingItem.training_id)
+        .all()
+    )
+    return {training_id: total for training_id, total in rows}
+
+
 def _serialize_item(item: TrainingItem, has_access: bool, progress: Optional[TrainingItemProgress]) -> dict:
     """Serializa un ítem. Sin acceso, el contenido real se vacía: esta función
-    es la frontera de seguridad, no la UI."""
-    locked = not has_access
+    es la frontera de seguridad, no la UI.
+
+    `is_free_preview` es la ÚNICA excepción a esa regla: el ítem marcado como
+    introducción viaja completo aunque quien pregunte no tenga acceso, y
+    aunque no tenga sesión (la landing pública serializa con has_access=False).
+    Es deliberado —es el anzuelo comercial— y por eso la excepción vive acá,
+    en el mismo lugar que la regla, y no repartida por la UI.
+
+    Marcar un ítem como intro publica su `video_ref` para siempre: el ID de
+    YouTube queda a la vista de cualquiera. Ver sql/19_training_items_intro_gratis.sql.
+    """
+    locked = not (has_access or item.is_free_preview)
     return {
         "id": item.id,
         "training_id": item.training_id,
@@ -86,6 +124,9 @@ def _serialize_item(item: TrainingItem, has_access: bool, progress: Optional[Tra
         "duration_minutes": item.duration_minutes,
         "sort_order": item.sort_order,
         "is_published": item.is_published,
+        # Viaja siempre: la vidriera lo necesita para ofrecer "ver la intro"
+        # en lugar de un candado.
+        "is_free_preview": bool(item.is_free_preview),
         "locked": locked,
         "last_position_sec": progress.last_position_sec if progress else None,
         "watched_sec": progress.watched_sec if progress else None,
@@ -104,6 +145,7 @@ def _serialize_training(
     include_items: bool = False,
     only_published_items: bool = True,
     payment_fallback: Optional[str] = None,
+    free_preview_views: Optional[int] = None,
 ) -> dict:
     progress = progress or {}
     items = [i for i in training.items if i.is_published or not only_published_items]
@@ -138,6 +180,14 @@ def _serialize_training(
         "sort_order": training.sort_order,
         "created_by_volunteer_id": training.created_by_volunteer_id,
         "item_count": len(items),
+        # Para el cartelito "Con intro gratis" de la vidriera y de /academia,
+        # que listan capacitaciones SIN sus ítems (include_items=False) y por
+        # eso no pueden mirarlos por su cuenta.
+        "has_free_preview": any(i.is_free_preview for i in items),
+        # Cuántos desconocidos la miraron. None = no se calculó (las vistas
+        # públicas no lo piden); 0 = se calculó y no la miró nadie. La
+        # diferencia importa: un cero de verdad es una señal, un "no sé" no.
+        "free_preview_views": free_preview_views,
         "has_access": has_access,
         "access_expires_at": expires_at,
         "completed_items": sum(1 for i in items if progress.get(i.id) and progress[i.id].completed_at),
@@ -188,15 +238,26 @@ def list_trainings(
     user_type: Optional[str] = Query(None),
     user_id: Optional[int] = Query(None),
     include_items: bool = Query(False),
+    include_unpublished: bool = Query(False),
+    include_stats: bool = Query(False),
     db: Session = Depends(get_db),
 ):
-    """Catálogo. Con user_type/user_id viene marcado qué tiene habilitado."""
+    """Catálogo. Con user_type/user_id viene marcado qué tiene habilitado.
+
+    `include_unpublished` lo usa la pantalla de administración: sin él, ocultar
+    un contenido lo hacía desaparecer TAMBIÉN del panel del admin, y como el
+    ojo era el único modo de volver a mostrarlo, esconder algo era un viaje de
+    ida. El endpoint de a uno (`/{training_id}`) ya lo soportaba; faltaba acá,
+    que es el que alimenta el panel. Quien puede pedirlo lo decide el BFF.
+    """
     q = db.query(Training)
     if status:
         q = q.filter(Training.status == status)
 
     trainings = q.order_by(Training.sort_order, Training.title).all()
     fallback = settings_service.get(db, settings_service.PAYMENT_URL_KEY)
+    # Se resuelve UNA vez para toda la lista, antes del bucle.
+    preview_views = _preview_view_counts(db) if include_stats else None
 
     result = []
     for t in trainings:
@@ -208,7 +269,9 @@ def list_trainings(
                 expires_at=expires_at,
                 progress=_progress_map(db, person_id, t.id) if include_items else None,
                 include_items=include_items,
+                only_published_items=not include_unpublished,
                 payment_fallback=fallback,
+                free_preview_views=None if preview_views is None else preview_views.get(t.id, 0),
             )
         )
     return result
@@ -273,7 +336,13 @@ def public_catalog(db: Session = Depends(get_db)):
 def public_landing(slug: str, db: Session = Depends(get_db)):
     """Landing pública (sin sesión): título, descripción, precio y TEMARIO.
 
-    Nunca devuelve contenido: los ítems vienen todos con locked=True.
+    Los ítems vienen con locked=True y sin `video_ref`, salvo UNO: el marcado
+    como introducción abierta (`is_free_preview`), que sale entero justamente
+    para que se pueda mirar acá sin pagar. Es la única excepción y la aplica
+    _serialize_item; ver sql/19_training_items_intro_gratis.sql.
+
+    `only_published_items` queda en su default (True): una intro marcada pero
+    despublicada no se filtra por esta puerta.
     """
     training = db.query(Training).filter(Training.slug == slug, Training.status == "publicada").first()
     if not training:
@@ -397,6 +466,59 @@ def check_video(data: VideoCheckRequest):
     )
 
 
+def _clear_other_previews(db: Session, training_id: int, keep_item_id: Optional[int]) -> None:
+    """Deja UNA sola introducción abierta por capacitación.
+
+    La base no lo impide (es un flag por fila), así que la exclusividad se
+    aplica acá y no en la pantalla: cualquier cliente que marque una intro
+    nueva apaga la anterior, sin que haya que acordarse de hacerlo. Va dentro
+    de la misma transacción que el alta/edición.
+
+    Que sean varias no rompería nada técnicamente —el gating funciona ítem por
+    ítem—, pero regalaría contenido pago sin que nadie se entere. Si algún día
+    se quiere mostrar además una clase de muestra, se saca esta función y el
+    esquema ya lo soporta.
+    """
+    q = db.query(TrainingItem).filter(
+        TrainingItem.training_id == training_id,
+        TrainingItem.is_free_preview.is_(True),
+    )
+    if keep_item_id:
+        q = q.filter(TrainingItem.id != keep_item_id)
+    for otro in q.all():
+        otro.is_free_preview = False
+
+
+def _validar_intro(*, is_free_preview: bool, is_published: bool, kind: str, video_ref) -> None:
+    """Una introducción marcada tiene que poder verse de verdad.
+
+    Se valida sobre el estado RESULTANTE, no sobre lo que vino en el request.
+    Así una sola regla cubre los dos caminos que llevan a la misma
+    contradicción:
+
+      · marcar como intro un contenido que está oculto, y
+      · ocultar el contenido que ya era la intro.
+
+    Los dos dejaban una capacitación que en el panel dice "Intro gratis" y en
+    la landing no muestra nada, sin que nada explicara por qué. Se prefiere
+    frenar y pedir el otro clic antes que apagar en silencio una marca que la
+    persona no tocó.
+    """
+    if not is_free_preview:
+        return
+    if not is_published:
+        raise HTTPException(
+            status_code=422,
+            detail="Un contenido oculto no puede ser la vista previa: "
+                   "hacelo visible primero.",
+        )
+    if kind == "video" and not video_ref:
+        raise HTTPException(
+            status_code=422,
+            detail="La vista previa necesita un video cargado.",
+        )
+
+
 @router.post("/{training_id}/items", response_model=TrainingItemOut, status_code=201)
 def create_item(training_id: int, data: TrainingItemCreate, db: Session = Depends(get_db)):
     _get_or_404(training_id, db)
@@ -409,6 +531,13 @@ def create_item(training_id: int, data: TrainingItemCreate, db: Session = Depend
             raise HTTPException(status_code=422, detail="El link de YouTube no es válido")
         payload["video_ref"] = video_id
 
+    _validar_intro(
+        is_free_preview=bool(payload.get("is_free_preview")),
+        is_published=bool(payload.get("is_published", True)),
+        kind=payload.get("kind") or "video",
+        video_ref=payload.get("video_ref"),
+    )
+
     if not payload.get("sort_order"):
         last = (
             db.query(func.max(TrainingItem.sort_order))
@@ -420,6 +549,9 @@ def create_item(training_id: int, data: TrainingItemCreate, db: Session = Depend
     try:
         item = TrainingItem(**payload, training_id=training_id)
         db.add(item)
+        if payload.get("is_free_preview"):
+            db.flush()  # necesita el id del ítem nuevo para no apagarse a sí mismo
+            _clear_other_previews(db, training_id, item.id)
         db.commit()
         db.refresh(item)
         log_info("Contenido agregado", module="capacitaciones", action="create_item",
@@ -445,9 +577,21 @@ def update_item(item_id: int, data: TrainingItemUpdate, db: Session = Depends(ge
             raise HTTPException(status_code=422, detail="El link de YouTube no es válido")
         payload["video_ref"] = video_id
 
+    # Sobre el estado que va a QUEDAR, mezclando lo que ya estaba guardado con
+    # lo que trae este PUT: un `exclude_unset` significa "no lo toques", no
+    # "ponelo en falso".
+    _validar_intro(
+        is_free_preview=bool(payload.get("is_free_preview", item.is_free_preview)),
+        is_published=bool(payload.get("is_published", item.is_published)),
+        kind=payload.get("kind", item.kind) or "video",
+        video_ref=payload.get("video_ref", item.video_ref),
+    )
+
     try:
         for key, value in payload.items():
             setattr(item, key, value)
+        if payload.get("is_free_preview"):
+            _clear_other_previews(db, item.training_id, item.id)
         db.commit()
         db.refresh(item)
         log_info("Contenido actualizado", module="capacitaciones", action="edit_item", meta={"item_id": item_id})
@@ -555,9 +699,24 @@ def save_progress(item_id: int, data: ProgressUpdate, db: Session = Depends(get_
 @router.post("/items/{item_id}/view", status_code=201)
 def log_view(item_id: int, data: ViewCreate, db: Session = Depends(get_db)):
     """Registra una reproducción. Es lo que le da dientes al watermark y lo
-    que permite detectar cuentas compartidas."""
-    if not db.query(TrainingItem.id).filter(TrainingItem.id == item_id).first():
+    que permite detectar cuentas compartidas.
+
+    Acepta además las visitas SIN sesión a la introducción abierta, con la
+    convención `user_type='anonimo'`, `user_id=0` → `person_id` NULL (mismo
+    esquema de identidad `(user_type, user_id)` sin FK que usan las campanitas
+    y los anuncios). Sirve para saber si la intro convierte; no identifica a
+    nadie. Las alertas de cuenta compartida no se ensucian porque ya filtran
+    `person_id IS NOT NULL`.
+    """
+    item = db.query(TrainingItem).filter(TrainingItem.id == item_id).first()
+    if not item:
         raise HTTPException(status_code=404, detail="Contenido no encontrado")
+
+    # Un anónimo solo puede haber mirado la intro. Si dice haber visto otra
+    # cosa, o el player está mal cableado o alguien está probando IDs a mano:
+    # en los dos casos la fila sobra.
+    if data.user_type == ANON_USER_TYPE and not item.is_free_preview:
+        raise HTTPException(status_code=403, detail="Ese contenido no es una vista previa abierta")
 
     person_id = access_service.resolve_person_id(db, data.user_type, data.user_id)
     try:
