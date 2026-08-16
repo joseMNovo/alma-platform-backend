@@ -42,5 +42,8 @@ class ActivityUserSummary(BaseModel):
     role: str
     login_count: int
     last_login: Optional[datetime] = None
+    # Último evento de cualquier tipo: cuándo se lo vio por última vez, que
+    # no es lo mismo que cuándo empezó la sesión.
+    last_seen: Optional[datetime] = None
     view_counts: Dict[str, int]
     action_counts: Dict[str, int]
