@@ -29,7 +29,7 @@ def clean_payment_url(v: Optional[str]) -> Optional[str]:
 
 
 def slugify(value: str) -> str:
-    """Título → slug para la URL pública (/capacitaciones/<slug>)."""
+    """Título → slug para la URL pública (/formacion/<slug>)."""
     normalized = unicodedata.normalize("NFKD", value or "")
     ascii_only = normalized.encode("ascii", "ignore").decode("ascii").lower()
     cleaned = re.sub(r"[^a-z0-9]+", "-", ascii_only).strip("-")
