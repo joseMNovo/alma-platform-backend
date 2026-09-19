@@ -6,6 +6,7 @@ from config import settings
 from app.deps import verify_api_key
 from app.routers import (
     voluntarios,
+    stand,
     talleres,
     grupos,
     actividades,
@@ -81,6 +82,7 @@ app.include_router(encuestas.router,     prefix="/encuestas",      tags=["Encues
 app.include_router(recordatorios.router, prefix="/recordatorios",  tags=["Recordatorios"],   **common)
 app.include_router(accesos.router,       prefix="/accesos",        tags=["Accesos"],         **common)
 app.include_router(register.router,      prefix="/register",       tags=["Register"],        **common)
+app.include_router(stand.router,         prefix="/stand",          tags=["Stand"],           **common)
 
 
 @app.get("/", tags=["Health"])

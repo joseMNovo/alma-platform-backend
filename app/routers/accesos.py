@@ -43,8 +43,8 @@ def _notify_granted(db: Session, person: ParticipantProfile, module_key: str, re
         return
 
     title = "Ya tenés acceso"
-    # "Contenido" es el grupo del nav; "Academia" es la pestaña adentro.
-    body = "Entrá a Contenido → Academia para ver el contenido."
+    # "Academia" es el grupo del nav; "Capacitaciones" es la pestaña adentro.
+    body = "Entrá a Academia → Capacitaciones para ver el contenido."
     url = "/academia"
 
     if module_key == "capacitaciones" and resource_id:
@@ -54,7 +54,7 @@ def _notify_granted(db: Session, person: ParticipantProfile, module_key: str, re
             # los títulos largos y "Ya tenés acceso a Capacitación de pru…" no
             # dice nada. El cuerpo tiene lugar de sobra.
             title = "Ya tenés acceso"
-            body = f"«{training.title}» ya está disponible. Entrá a Contenido → Academia."
+            body = f"«{training.title}» ya está disponible. Entrá a Academia → Capacitaciones."
 
     try:
         notify_user(

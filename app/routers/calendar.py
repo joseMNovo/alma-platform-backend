@@ -65,7 +65,9 @@ def _send_event_reminder_emails(event: dict, recipients: list[dict]) -> None:
                             "event_date": event["date_full"],
                             "event_time": event["time"],
                             "when_label": event["when"],
-                            "notes": event["notes"],
+                            # Las notas del evento son internas del equipo. Al
+                            # participante anotado le llegaba todo por mail.
+                            "notes": "" if r.get("user_type") == "participante" else event["notes"],
                             "app_url": settings.APP_BASE_URL,
                         },
                     ),
@@ -100,13 +102,14 @@ def list_instances_rich(
     month: Optional[int] = Query(None),
     type: Optional[str] = Query(None),
     volunteer_id: Optional[int] = Query(None),
+    viewer_role: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
     """Instancias de calendario con coordinadores, co-coordinadores y lista de voluntarios (JOIN a voluntarios)."""
     sql = """
     SELECT
         ci.id, ci.type, ci.source_id, ci.title, ci.date, ci.start_time, ci.end_time, ci.notes, ci.status,
-        ci.notify_enabled, ci.reminder_offsets, ci.created_by_volunteer_id,
+        ci.notify_enabled, ci.visible_participantes, ci.reminder_offsets, ci.created_by_volunteer_id,
         coord_v.id   AS coord_id,   coord_v.name   AS coord_name,   coord_v.last_name AS coord_last
     FROM calendar_instances ci
     LEFT JOIN calendar_assignments coord_ca
@@ -135,6 +138,13 @@ def list_instances_rich(
             )
         )"""
         params["vol_id"] = volunteer_id
+
+    # Un participante solo ve lo marcado para participantes, y sin las notas
+    # internas del evento. El rol lo manda el BFF desde el JWT: no es un dato
+    # que el navegador pueda elegir.
+    es_participante = viewer_role == "participante"
+    if es_participante:
+        sql += " AND ci.visible_participantes = 1"
 
     sql += " ORDER BY ci.date ASC, ci.start_time ASC"
 
@@ -218,9 +228,10 @@ def list_instances_rich(
             "date": str(row.date),
             "start_time": _fmt_time(row.start_time),
             "end_time": _fmt_time(row.end_time),
-            "notes": row.notes,
+            "notes": None if es_participante else row.notes,
             "status": row.status,
             "notify_enabled": bool(row.notify_enabled),
+            "visible_participantes": bool(row.visible_participantes),
             "reminder_offsets": _parse_offsets(row.reminder_offsets),
             "created_by_volunteer_id": row.created_by_volunteer_id,
             "coordinator": {"id": row.coord_id, "name": row.coord_name, "last_name": row.coord_last or ""}
@@ -272,7 +283,15 @@ def get_instance(id: int, db: Session = Depends(get_db)):
 @router.post("/instances", response_model=CalendarInstance, status_code=201)
 def create_instance(data: CalendarInstanceCreate, db: Session = Depends(get_db)):
     try:
-        ci = CIModel(**data.model_dump())
+        # Qué ve un participante: si no viene decidido, lo define el tipo.
+        # Grupo y taller son para participantes por definición; "actividad"
+        # es el cajón donde el equipo carga también lo interno (reuniones de
+        # comisión), así que nace oculta. El olvido nunca expone: quien carga
+        # algo interno no tiene que acordarse de destildar nada.
+        payload = data.model_dump()
+        if payload.get("visible_participantes") is None:
+            payload["visible_participantes"] = 1 if payload["type"] in ("grupo", "taller") else 0
+        ci = CIModel(**payload)
         db.add(ci)
         db.commit()
         db.refresh(ci)
@@ -552,8 +571,14 @@ def list_event_participants(event_id: int, db: Session = Depends(get_db)):
 
 @router.post("/instances/{event_id}/participants", response_model=CalendarEventParticipant, status_code=201)
 def add_event_participant(event_id: int, data: CalendarEventParticipantCreate, db: Session = Depends(get_db)):
-    if not db.query(CIModel).filter(CIModel.id == event_id).first():
+    ci = db.query(CIModel).filter(CIModel.id == event_id).first()
+    if not ci:
         raise HTTPException(status_code=404, detail="Instancia no encontrada")
+
+    # Lo que un participante no puede ver, tampoco se puede anotar: sin esto
+    # alguien con el id se inscribe igual a una reunión interna.
+    if not ci.visible_participantes:
+        raise HTTPException(status_code=403, detail="Este evento no está abierto a participantes")
 
     # Idempotente: si ya está anotado a ESTE evento, se reactiva/devuelve en vez
     # de duplicar. Inscribirse dos veces al mismo encuentro es un no-op.

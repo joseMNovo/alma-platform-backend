@@ -476,4 +476,10 @@ def verify_email_participant(data: VerifyEmailRequest, db: Session = Depends(get
         log_error("Error al verificar email de participante", module="participantes", action="verify_email", meta={"id": p.id}, exc_info=True)
         raise
 
-    return {"message": "Email verificado correctamente."}
+    # Se devuelve quién es para que el BFF pueda abrir la sesión en el mismo
+    # paso: el link del mail verifica Y entra, sin pedir el PIN de nuevo.
+    return {
+        "message": "Email verificado correctamente.",
+        "participant_id": p.id,
+        "email": p.email,
+    }

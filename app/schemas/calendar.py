@@ -24,6 +24,7 @@ class CalendarInstanceRich(BaseModel):
     notes: Optional[str] = None
     status: str
     notify_enabled: bool = False
+    visible_participantes: bool = False
     reminder_offsets: Optional[List[int]] = None
     created_by_volunteer_id: Optional[int] = None
     coordinator: Optional[VolunteerRef] = None
@@ -76,6 +77,8 @@ class CalendarInstanceBase(BaseModel):
     notes: Optional[str] = None
     status: Literal["programado", "realizado", "cancelado"] = "programado"
     notify_enabled: bool = False
+    # None = que lo decida el tipo del evento (ver create_instance).
+    visible_participantes: Optional[bool] = None
     reminder_offsets: Optional[List[int]] = None
     created_by_volunteer_id: Optional[int] = None
 
@@ -94,6 +97,7 @@ class CalendarInstanceUpdate(BaseModel):
     notes: Optional[str] = None
     status: Optional[Literal["programado", "realizado", "cancelado"]] = None
     notify_enabled: Optional[bool] = None
+    visible_participantes: Optional[bool] = None
     reminder_offsets: Optional[List[int]] = None
 
 

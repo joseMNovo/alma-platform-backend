@@ -84,9 +84,10 @@ _BODIES: dict[str, str] = {
 <p style="margin:0 0 12px;color:#6B6B6B;font-size:15px;line-height:1.8;font-weight:300;">
   Gracias por registrarte en ALMA. Para activar tu cuenta<br>confirmá tu dirección de email.
 </p>
-<p style="margin:0 0 36px;color:#AAAAAA;font-size:13px;line-height:1.6;font-weight:300;">
+<p style="margin:0 0 12px;color:#AAAAAA;font-size:13px;line-height:1.6;font-weight:300;">
   El link es válido por {{expiry}}.
 </p>
+{{nota_html}}
 <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 auto;">
   <tr>
     <td style="border-radius:7px;background:#5EC0CF;">

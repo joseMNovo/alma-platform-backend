@@ -26,6 +26,15 @@ class VoluntarioBase(BaseModel):
     def _normalize_names(cls, v):
         return normalize_name(v)
 
+    @field_validator("age", "birth_date", mode="before")
+    @classmethod
+    def _vacio_es_nulo(cls, v):
+        """El formulario manda "" cuando el campo queda en blanco. Sin esto
+        Pydantic tira 422 y el voluntario no se puede guardar — pasaba al
+        marcar a alguien como admin sin tener la edad cargada."""
+        return None if v == "" else v
+
+
 
 class VoluntarioCreate(VoluntarioBase):
     pass
@@ -52,6 +61,14 @@ class VoluntarioUpdate(BaseModel):
     @classmethod
     def _normalize_names(cls, v):
         return normalize_name(v)
+
+    @field_validator("age", "birth_date", mode="before")
+    @classmethod
+    def _vacio_es_nulo(cls, v):
+        """El formulario manda "" cuando el campo queda en blanco. Sin esto
+        Pydantic tira 422 y el voluntario no se puede guardar — pasaba al
+        marcar a alguien como admin sin tener la edad cargada."""
+        return None if v == "" else v
 
 
 class VoluntarioAuth(BaseModel):

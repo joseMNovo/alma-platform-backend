@@ -66,6 +66,9 @@ class Persona(PersonaBase):
     participant_id: Optional[int] = None   # presente => la persona tiene cuenta de login
     is_volunteer: bool = False             # rol voluntario (flag descriptivo)
     volunteer_id: Optional[int] = None     # presente => tiene ficha en `voluntarios`
+    # Vive en `voluntarios`, no en el perfil: lo resuelve el listado con una
+    # consulta aparte. Solo puede ser True si hay volunteer_id.
+    is_admin: bool = False
     source: Optional[str] = None
     invited_at: Optional[datetime] = None
     created_at: Optional[datetime] = None

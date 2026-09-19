@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from app.database import get_db
 from app.models.participant import ParticipantProfile as ProfileModel
+from app.models.voluntario import Voluntario as VoluntarioModel
 from app.schemas.persona import Persona, PersonaCreate, PersonaUpdate
 from app.utils.logger import log_info, log_warn, log_error
 
@@ -35,12 +36,32 @@ def list_personas(
         q = q.filter(ProfileModel.city.ilike(f"%{city}%"))
     if province:
         q = q.filter(ProfileModel.province.ilike(f"%{province}%"))
-    return (
+    filas = (
         q.order_by(ProfileModel.name, ProfileModel.last_name)
         .offset(skip)
         .limit(limit)
         .all()
     )
+
+    # `is_admin` vive en la tabla voluntarios, no en el perfil. Se resuelve con
+    # UNA consulta para toda la página: una por fila sería N+1 sobre la lista
+    # completa de personas.
+    ids = [p.volunteer_id for p in filas if p.volunteer_id]
+    admins = set()
+    if ids:
+        admins = {
+            vid
+            for (vid,) in db.query(VoluntarioModel.id)
+            .filter(VoluntarioModel.id.in_(ids), VoluntarioModel.is_admin.is_(True))
+            .all()
+        }
+
+    salida = []
+    for p in filas:
+        datos = Persona.model_validate(p).model_dump()
+        datos["is_admin"] = bool(p.volunteer_id and p.volunteer_id in admins)
+        salida.append(datos)
+    return salida
 
 
 @router.get("/{id}", response_model=Persona)

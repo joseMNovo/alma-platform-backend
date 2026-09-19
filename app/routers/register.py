@@ -67,8 +67,32 @@ def send_verification_email(participant_id: int, email: str, name: str | None = 
         url = f"{settings.APP_BASE_URL}/verificar-email?token={raw}&type=participant"
         # Volver a la compra después de verificar. Solo rutas internas de
         # capacitaciones: el frontend lo revalida antes de navegar.
-        if next_path and next_path.startswith("/capacitacion/") and not next_path.startswith("//"):
+        if (
+            next_path
+            and (
+                next_path == "/academia"
+                or next_path.startswith("/academia/")
+                # `/academia?c=<slug>` es la vista CON sesión de una
+                # capacitación. Sin esta rama el link del wizard perdía el
+                # destino y la persona terminaba en Inicio.
+                or next_path.startswith("/academia?")
+            )
+            and not next_path.startswith("//")
+        ):
             url += f"&next={quote(next_path, safe='/')}"
+
+        # Quien llega desde la compra ya pagó (o está por pagar) y necesita
+        # saber que la habilitación la hace una persona, no el sistema. Sin
+        # esto, el silencio de un sábado a la tarde se lee como estafa.
+        nota_html = ""
+        if next_path:
+            nota_html = (
+                '<p style="margin:0 0 36px;color:#6B6B6B;font-size:14px;'
+                'line-height:1.7;font-weight:300;">'
+                "Si compraste una capacitación, un voluntario de ALMA va a habilitarte "
+                "el acceso dentro de las próximas 24 horas. Te avisamos cuando esté lista."
+                "</p>"
+            )
 
         email_service.send_email(
             db,
@@ -80,6 +104,7 @@ def send_verification_email(participant_id: int, email: str, name: str | None = 
                     "name": name or email.split("@")[0],
                     "verification_url": url,
                     "expiry": _expiry_label(),
+                    "nota_html": nota_html,
                 },
             ),
         )

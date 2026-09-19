@@ -15,6 +15,9 @@ class CalendarInstance(Base):
     notes = Column(Text)
     status = Column(String(20), nullable=False, default="programado")
     notify_enabled = Column(Integer, nullable=False, default=0)
+    # Qué ve un participante. El default lo pone el router según el tipo:
+    # grupo y taller nacen visibles, actividad no (ver create_instance).
+    visible_participantes = Column(Integer, nullable=False, default=0)
     reminder_offsets = Column(JSON, nullable=True)
     created_by_volunteer_id = Column(Integer, ForeignKey("voluntarios.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(TIMESTAMP)
