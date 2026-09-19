@@ -21,8 +21,26 @@ from app.schemas.stand import (
     StandSaleCreate, StandSaleOut, StandSummary,
 )
 from app.utils.logger import log_info, log_warn, log_error
+from app.utils.timezone import AR_TZ
 
 router = APIRouter()
+
+
+def _con_huso(dt):
+    """Devuelve el timestamp convertido a hora de Argentina y con el huso puesto.
+
+    MySQL entrega los TIMESTAMP como fechas "peladas" calculadas con el reloj
+    del VPS, que corre en Europe/Berlin (ver app/utils/timezone.py). Sin huso,
+    el navegador las toma como locales y una venta de las 15:49 se mostraba a
+    las 20:49.
+
+    `astimezone(AR_TZ)` interpreta la fecha naive como hora local del servidor
+    —que es justo el reloj con el que MySQL la calculó— y la pasa a Argentina.
+    Así viaja `...-03:00` y el teléfono no tiene que adivinar nada. Se apoya en
+    el AR_TZ que ya usa el calendario para no tener dos definiciones de "la
+    hora de acá" que puedan separarse.
+    """
+    return dt.astimezone(AR_TZ) if dt is not None else None
 
 
 def _vendidos_por_producto(db: Session) -> dict:
@@ -132,7 +150,7 @@ def _serializar_venta(venta: StandSale, productos: Optional[dict] = None) -> Sta
         customer_name=venta.customer_name,
         customer_email=venta.customer_email,
         is_void=bool(venta.is_void),
-        created_at=venta.created_at,
+        created_at=_con_huso(venta.created_at),
         items=items,
     )
 
