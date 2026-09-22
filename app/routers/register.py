@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from config import settings
 from app.database import get_db, SessionLocal
+from app.models.purchase_intent import PurchaseIntent
 from app.models.participant import Participant, ParticipantProfile
 from app.models.voluntario import Voluntario
 from app.schemas.email_log import SendEmailRequest
@@ -243,7 +244,13 @@ def register_participante(
                 accepts_whatsapp=False,
             )
             db.add(profile)
+            db.flush()  # hace falta el id del perfil para la intención
             linked = False
+
+        # Venía del wizard de compra: queda anotado QUÉ quiso comprar. Sin
+        # esto, mañana no hay forma de saber a quién recordarle que pague.
+        if data.training_id:
+            db.add(PurchaseIntent(person_id=profile.id, training_id=data.training_id))
 
         db.commit()
         db.refresh(participant)

@@ -42,6 +42,12 @@ tienen `ALTER` que fallan si ya se aplicaron (revisar antes de repetir).
 | 17 | `17_recordatorios_participantes.sql` | `participant_event_reminders` + `participant_reminder_sent_log` (cada participante elige sus avisos por evento) |
 | 18 | `18_encuestas_justificacion.sql` | Agrega `survey_questions.explanation` (el porqué de la respuesta, se muestra al terminar) |
 | 19 | `19_training_items_intro_gratis.sql` | Agrega `training_items.is_free_preview` (el video de introducción que se ve sin pagar y sin cuenta, en la landing pública) |
+| 20 | ⚠️ `20_calendario_visible_participantes.sql` | Agrega la marca por evento que decide si un participante lo ve (las reuniones de voluntarios y comisión dejan de aparecerle) |
+| 21 | `21_puesto_venta.sql` | `stand_products`, `stand_sales`, `stand_sale_items` (el puesto de venta de la jornada) |
+| 22 | `22_limpiar_ventas_anuladas.sql` | Limpieza puntual de ventas anuladas mal cargadas |
+| 23 | `23_avisos_de_pago.sql` | `payment_claims` — el "ya pagué" con comprobante, antes de que un admin lo confirme |
+| 24 | `24_intenciones_de_compra.sql` | `purchase_intents` — quién se registró para comprar qué y todavía no pagó (alimenta el recordatorio a las 24 h) |
+| 25 | ⚠️ `25_inventario_y_puesto_de_venta.sql` | Une los dos catálogos: `stand_products.inventory_item_id` + alta en `inventario` de los productos que ya existían. El stock pasa a salir del inventario |
 
 `15_encuestas.sql` va **antes** que `16_certificados_emitidos.sql`: un certificado
 referencia el intento de evaluación que lo habilitó.

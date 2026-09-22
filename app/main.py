@@ -7,6 +7,7 @@ from app.deps import verify_api_key
 from app.routers import (
     voluntarios,
     stand,
+    ingresos,
     talleres,
     grupos,
     actividades,
@@ -83,6 +84,7 @@ app.include_router(recordatorios.router, prefix="/recordatorios",  tags=["Record
 app.include_router(accesos.router,       prefix="/accesos",        tags=["Accesos"],         **common)
 app.include_router(register.router,      prefix="/register",       tags=["Register"],        **common)
 app.include_router(stand.router,         prefix="/stand",          tags=["Stand"],           **common)
+app.include_router(ingresos.router,      prefix="/ingresos",       tags=["Ingresos"],        **common)
 
 
 @app.get("/", tags=["Health"])

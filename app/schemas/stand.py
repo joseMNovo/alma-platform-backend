@@ -11,7 +11,6 @@ MEDIOS_DE_PAGO = {"efectivo", "transferencia"}
 class StandProductBase(BaseModel):
     name: str
     unit_price: Decimal = Decimal("0")
-    initial_stock: int = 0
     is_active: bool = True
     sort_order: int = 0
 
@@ -24,13 +23,20 @@ class StandProductBase(BaseModel):
 
 
 class StandProductCreate(StandProductBase):
-    pass
+    """Alta desde el puesto. Crea también el ítem en el inventario: dar de alta
+    un producto acá ES dar de alta mercadería, no una copia de la mercadería."""
+
+    # Lo que hay para vender. Va a `inventario.quantity`, que es donde el stock
+    # vive ahora. Acá no se guarda ningún contador.
+    quantity: int = 0
+    category: Optional[str] = None
 
 
 class StandProductUpdate(BaseModel):
     name: Optional[str] = None
     unit_price: Optional[Decimal] = None
-    initial_stock: Optional[int] = None
+    # Corrige el stock del ítem en el inventario (un conteo físico, por ejemplo).
+    quantity: Optional[int] = None
     is_active: Optional[bool] = None
     sort_order: Optional[int] = None
 
@@ -39,9 +45,12 @@ class StandProductOut(StandProductBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    # Calculados sobre las ventas no anuladas, no guardados: un contador
-    # guardado se desincroniza en cuanto alguien anula una venta.
+    # NULL solo en productos anteriores a la unión de los dos catálogos.
+    inventory_item_id: Optional[int] = None
+    # Vendidas: se calcula sobre las ventas no anuladas, nunca se guarda.
     sold: int = 0
+    # Lo que queda: sale de `inventario.quantity`. Para un producto sin
+    # enganchar se cae al cálculo viejo, `initial_stock - sold`.
     stock: int = 0
 
 

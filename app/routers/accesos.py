@@ -18,12 +18,16 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.access import PersonAccessGrant, PersonPayment, AccessAudit
+from app.models.payment_claim import PaymentClaim
 from app.models.participant import ParticipantProfile
 from app.models.training import Training
 from app.models.voluntario import Voluntario
 from app.schemas.access import (
     GrantCreate, GrantBulkCreate, GrantOut, GrantRevoke,
     PaymentCreate, PaymentOut, MatrixRow, AccessAuditOut, MyAccess,
+)
+from app.schemas.payment_claim import (
+    PaymentClaimCreate, PaymentClaimResolve, PaymentClaimOut,
 )
 from app.services import access_service
 from app.services.notification_service import notify_user
@@ -582,3 +586,172 @@ def payments_summary(
         }
         for r in rows
     ]
+
+
+# ── Avisos de pago ("ya pagué") ────────────────────────────────────────
+#
+# Los manda quien compró, con su comprobante. NO habilitan nada por sí solos:
+# son una cola de trabajo. Un voluntario abre el comprobante y decide — recién
+# ahí se crea el pago y el acceso, en la misma transacción que el resto.
+
+def _armar_aviso(claim: PaymentClaim, persona: Optional[ParticipantProfile]) -> PaymentClaimOut:
+    return PaymentClaimOut(
+        **{c.name: getattr(claim, c.name) for c in PaymentClaim.__table__.columns},
+        person_name=(f"{persona.name or ''} {persona.last_name or ''}".strip() or None) if persona else None,
+        person_email=persona.email if persona else None,
+    )
+
+
+@router.get("/avisos-de-pago", response_model=List[PaymentClaimOut])
+def list_payment_claims(
+    status: Optional[str] = Query("pendiente"),
+    db: Session = Depends(get_db),
+):
+    q = db.query(PaymentClaim)
+    if status == "resueltos":
+        # Confirmados y rechazados juntos: son el historial. Separarlos en dos
+        # filtros obligaba a adivinar en cuál mirar, y cada fila ya dice en qué
+        # terminó.
+        q = q.filter(PaymentClaim.status != "pendiente")
+    elif status:
+        q = q.filter(PaymentClaim.status == status)
+    claims = q.order_by(PaymentClaim.created_at.desc(), PaymentClaim.id.desc()).all()
+    if not claims:
+        return []
+
+    # Una sola consulta para todas las personas de la página, no una por fila.
+    ids = {c.person_id for c in claims}
+    personas = {
+        p.id: p
+        for p in db.query(ParticipantProfile).filter(ParticipantProfile.id.in_(ids)).all()
+    }
+    return [_armar_aviso(c, personas.get(c.person_id)) for c in claims]
+
+
+@router.post("/avisos-de-pago", response_model=PaymentClaimOut, status_code=201)
+def create_payment_claim(data: PaymentClaimCreate, db: Session = Depends(get_db)):
+    """Registra el aviso. No habilita ni cuenta como ingreso."""
+    persona = _person_or_404(data.person_id, db)
+
+    # Un aviso pendiente por concepto alcanza: tocar el botón tres veces no
+    # tiene que llenar la cola con tres filas de lo mismo.
+    existente = (
+        db.query(PaymentClaim)
+        .filter(
+            PaymentClaim.person_id == data.person_id,
+            PaymentClaim.concept_type == data.concept_type,
+            PaymentClaim.concept_id == data.concept_id,
+            PaymentClaim.status == "pendiente",
+        )
+        .first()
+    )
+    if existente:
+        # Se actualiza el que ya estaba en vez de duplicar: si mandó el
+        # comprobante en el segundo intento, ese es el que vale.
+        if data.file_guid:
+            existente.file_guid = data.file_guid
+        if data.message:
+            existente.message = data.message
+        db.commit()
+        db.refresh(existente)
+        return _armar_aviso(existente, persona)
+
+    try:
+        claim = PaymentClaim(**data.model_dump())
+        db.add(claim)
+        db.commit()
+        db.refresh(claim)
+    except Exception:
+        db.rollback()
+        log_error("Error al registrar aviso de pago", module="accesos",
+                  action="payment_claim", meta={"person_id": data.person_id}, exc_info=True)
+        raise
+
+    log_info("Aviso de pago recibido", module="accesos", action="payment_claim",
+             meta={"person_id": data.person_id, "concepto": data.concept_type,
+                   "recurso": data.concept_id, "con_comprobante": bool(data.file_guid)})
+    return _armar_aviso(claim, persona)
+
+
+def _tomar_aviso(claim_id: int, db: Session) -> PaymentClaim:
+    claim = db.query(PaymentClaim).filter(PaymentClaim.id == claim_id).first()
+    if not claim:
+        raise HTTPException(status_code=404, detail="Aviso no encontrado")
+    if claim.status != "pendiente":
+        raise HTTPException(status_code=409, detail="Ese aviso ya fue resuelto")
+    return claim
+
+
+@router.post("/avisos-de-pago/{claim_id}/confirmar", response_model=PaymentClaimOut)
+def confirm_payment_claim(claim_id: int, data: PaymentClaimResolve, db: Session = Depends(get_db)):
+    """Da por bueno el aviso: habilita y registra el pago, todo junto.
+
+    Mismo criterio que `create_grant`: o quedan el acceso y el pago, o no
+    queda ninguno de los dos.
+    """
+    claim = _tomar_aviso(claim_id, db)
+    persona = _person_or_404(claim.person_id, db)
+
+    try:
+        access_service.grant_access(
+            db,
+            person_id=claim.person_id,
+            module_key=claim.concept_type if claim.concept_type != "capacitacion" else "capacitaciones",
+            resource_id=claim.concept_id,
+            access_days=data.access_days,
+            notes=data.notes,
+            actor_type="admin",
+            actor_id=data.volunteer_id or 0,
+            commit=False,
+        )
+
+        if data.amount is not None:
+            db.add(PersonPayment(
+                person_id=claim.person_id,
+                concept_type=claim.concept_type,
+                concept_id=claim.concept_id,
+                concept_label=claim.concept_label,
+                amount=data.amount,
+                method=data.method,
+                reference=data.reference,
+                paid_at=data.paid_at or datetime.now().date(),
+                registered_by_volunteer_id=data.volunteer_id,
+                notes=data.notes,
+            ))
+
+        claim.status = "confirmado"
+        claim.resolved_by_volunteer_id = data.volunteer_id
+        claim.resolved_at = datetime.now()
+        claim.resolution_notes = data.notes
+        db.commit()
+        db.refresh(claim)
+    except Exception:
+        db.rollback()
+        log_error("Error al confirmar aviso de pago", module="accesos",
+                  action="payment_claim_confirm", meta={"claim_id": claim_id}, exc_info=True)
+        raise
+
+    log_info("Aviso de pago confirmado", module="accesos", action="payment_claim_confirm",
+             user=data.volunteer_id, meta={"claim_id": claim_id, "person_id": claim.person_id})
+    return _armar_aviso(claim, persona)
+
+
+@router.post("/avisos-de-pago/{claim_id}/rechazar", response_model=PaymentClaimOut)
+def reject_payment_claim(claim_id: int, data: PaymentClaimResolve, db: Session = Depends(get_db)):
+    """Descarta el aviso. No borra nada: queda el rastro de que se reclamó y
+    de quién decidió que no correspondía."""
+    claim = _tomar_aviso(claim_id, db)
+    persona = db.query(ParticipantProfile).filter(
+        ParticipantProfile.id == claim.person_id
+    ).first()
+
+    claim.status = "rechazado"
+    claim.resolved_by_volunteer_id = data.volunteer_id
+    claim.resolved_at = datetime.now()
+    claim.resolution_notes = data.notes
+    db.commit()
+    db.refresh(claim)
+
+    log_warn("Aviso de pago rechazado", module="accesos", action="payment_claim_reject",
+             user=data.volunteer_id, meta={"claim_id": claim_id, "person_id": claim.person_id})
+    return _armar_aviso(claim, persona)

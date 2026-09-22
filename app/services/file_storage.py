@@ -59,6 +59,19 @@ PURPOSES: dict[str, dict] = {
         "max_mb": 3,
         "max_px": 1200,
     },
+    "comprobante_pago": {
+        "label": "Comprobante de pago",
+        # PDF además de imagen: los bancos y MercadoPago dan las dos cosas, y
+        # obligar a sacarle una foto a un PDF es pedirle un paso de más a
+        # alguien que ya pagó.
+        "mimes": {"image/jpeg", "image/png", "image/webp", "application/pdf"},
+        "max_mb": 5,
+        # 1600 px de lado largo (el default). Una captura de celular entra de
+        # sobra con el número de operación legible, y el archivo baja de varios
+        # MB a unos cientos de KB — que es lo que mantiene chico el backup.
+        # Los PDF no se tocan: el redimensionado es solo para imágenes.
+        "max_px": None,
+    },
 }
 
 # Magic bytes → mime real. Es la verificación que impide que suban un .php

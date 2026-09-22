@@ -680,6 +680,164 @@ def send_participant_push(row: dict, offset: int) -> None:
 
 # ── Orquestación ───────────────────────────────────────────────────────────
 
+# ── Tercera tanda: compras que quedaron sin pagar ──────────────────────
+
+SQL_COMPRAS_PENDIENTES = """
+SELECT pi.id            AS intent_id,
+       pi.person_id     AS person_id,
+       pp.name          AS name,
+       pp.last_name     AS last_name,
+       pp.email         AS email,
+       t.id             AS training_id,
+       t.title          AS title,
+       t.slug           AS slug,
+       t.payment_url    AS payment_url
+  FROM purchase_intents pi
+  JOIN participant_profiles pp ON pp.id = pi.person_id
+  JOIN trainings           t  ON t.id  = pi.training_id
+ WHERE pi.reminded_at IS NULL
+   AND pi.created_at <= (NOW() - INTERVAL 24 HOUR)
+   AND pp.email IS NOT NULL AND pp.email <> ''
+   -- Ya lo habilitaron: no hay nada que recordar.
+   AND NOT EXISTS (
+         SELECT 1 FROM person_access_grants g
+          WHERE g.person_id  = pi.person_id
+            AND g.module_key = 'capacitaciones'
+            AND g.resource_id = pi.training_id
+            AND g.is_active = 1
+            AND g.revoked_at IS NULL)
+   -- Ya quedó registrado el pago, aunque todavía no se haya habilitado.
+   AND NOT EXISTS (
+         SELECT 1 FROM person_payments pay
+          WHERE pay.person_id    = pi.person_id
+            AND pay.concept_type = 'capacitacion'
+            AND pay.concept_id   = pi.training_id)
+   -- Ya avisó que pagó y está esperando que lo revisen. Apurarlo sería
+   -- exactamente el mail que no hay que mandar.
+   AND NOT EXISTS (
+         SELECT 1 FROM payment_claims pc
+          WHERE pc.person_id = pi.person_id
+            AND pc.concept_id = pi.training_id
+            AND pc.status = 'pendiente')
+ ORDER BY pi.created_at
+"""
+
+
+def _boton_pago(payment_url: str | None) -> str:
+    """El botón de pagar, o nada si esa capacitación no tiene link cargado."""
+    if not payment_url:
+        return ""
+    return (
+        '<table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px auto 0;">'
+        '<tr><td style="border-radius:7px;background:#5EC0CF;">'
+        f'<a href="{payment_url}" style="display:inline-block;padding:11px 28px;color:#ffffff;'
+        'text-decoration:none;font-size:14px;font-weight:600;border-radius:7px;'
+        """font-family:'Nunito Sans',Arial,sans-serif;">Pagar ahora</a>"""
+        "</td></tr></table>"
+    )
+
+
+def enviar_compra_pendiente(row: dict) -> tuple[str, str]:
+    """Manda UN recordatorio de compra pendiente. Devuelve (estado, motivo)."""
+    nombre = (row.get("name") or "").strip() or (row.get("email") or "").split("@")[0]
+    base = settings.APP_BASE_URL.rstrip("/")
+
+    payload = {
+        "to": [row["email"]],
+        "subject": f"Tu inscripción a {row['title']} quedó pendiente",
+        "template": "compra_pendiente",
+        "variables": {
+            "name": nombre,
+            "capacitacion": row["title"],
+            "boton_pago_html": _boton_pago(row.get("payment_url")),
+            # Cae DENTRO de la capacitación, que es donde está el botón de
+            # "ya pagué". Mandarlo a la vidriera lo obligaría a buscarla.
+            "avisar_url": f"{base}/academia?c={row['slug']}",
+            "app_url": base,
+        },
+        "sent_by_volunteer_id": None,
+    }
+
+    request = urllib.request.Request(
+        EMAIL_ENDPOINT,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Key": settings.INTERNAL_API_KEY,
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=EMAIL_REQUEST_TIMEOUT) as resp:
+            if resp.status != 201:
+                return REJECTED, f"el servidor respondió {resp.status}"
+    except urllib.error.HTTPError as exc:
+        return REJECTED, f"el servidor respondió {exc.code}"
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            return UNKNOWN, "el servidor no respondió a tiempo al conectar"
+        return REJECTED, f"no me pude conectar al servidor ({exc.reason})"
+    except TimeoutError:
+        # Mismo criterio que los recordatorios del calendario: el mail pudo
+        # haber salido igual, así que se marca como enviado y NO se reintenta.
+        # Preferimos que falte uno antes que mandar dos veces "pagá".
+        return UNKNOWN, f"el servidor no respondió en {EMAIL_REQUEST_TIMEOUT}s"
+
+    return ACCEPTED, ""
+
+
+def run_compras_pendientes(conn, today: date) -> dict:
+    """Le recuerda a quien se inscribió para comprar y no pagó.
+
+    Se manda UNA sola vez por intención: `reminded_at` se marca aunque el
+    envío quede sin confirmar. Insistir con un cobro es la clase de error que
+    hace que alguien se enoje con ALMA, y el costo de no insistir es que ese
+    cobro se pierda — mucho más barato.
+
+    Y NO se manda si ya pagó, ya está habilitado, o ya avisó que pagó. Esa
+    última condición es la que hace que esto conviva con el botón de "ya
+    pagué": quien ya levantó la mano no recibe un mail apurándolo.
+    """
+    contadores = {"sent": 0, "skipped": 0, "failed": 0, "unknown": 0}
+
+    with conn.cursor() as cur:
+        cur.execute(SQL_COMPRAS_PENDIENTES)
+        filas = cur.fetchall()
+
+    if not filas:
+        log.info("Compras pendientes: no hay nadie a quien recordarle.")
+        return contadores
+
+    log.info("Compras pendientes: %s.", _plural(len(filas), "recordatorio", "recordatorios"))
+
+    for row in filas:
+        estado, motivo = enviar_compra_pendiente(row)
+        etiqueta = f"{row.get('email')} · {row.get('title')}"
+
+        if estado == ACCEPTED:
+            contadores["sent"] += 1
+            log.info("Enviado: %s", etiqueta)
+        elif estado == UNKNOWN:
+            contadores["unknown"] += 1
+            log.error("? SIN CONFIRMAR: %s. Motivo: %s. NO se reintenta.", etiqueta, motivo)
+        else:
+            contadores["failed"] += 1
+            log.error("No se pudo enviar: %s. Motivo: %s", etiqueta, motivo)
+
+        # Se marca salvo que haya fallado de forma limpia (ahí sí se reintenta
+        # mañana, porque tenemos la certeza de que no salió nada).
+        if estado in (ACCEPTED, UNKNOWN):
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE purchase_intents SET reminded_at = NOW() WHERE id = %s",
+                    (row["intent_id"],),
+                )
+            conn.commit()
+
+    return contadores
+
+
 def run() -> int:
     today = today_ar()
     log.info("── Recordatorios ALMA · %s ──", _human_date(today))
@@ -769,6 +927,14 @@ def run() -> int:
         skipped += participantes["skipped"]
         failed += participantes["failed"]
         unknown += participantes["unknown"]
+
+        # Tercera tanda: compras que quedaron sin pagar. Misma conexión y mismo
+        # try, así un error acá también dispara la alerta.
+        compras = run_compras_pendientes(conn, today)
+        sent += compras["sent"]
+        skipped += compras["skipped"]
+        failed += compras["failed"]
+        unknown += compras["unknown"]
 
     except Exception as exc:  # noqa: BLE001
         log.exception("Se cortó la corrida por un error inesperado: %s", exc)

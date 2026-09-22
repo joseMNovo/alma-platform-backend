@@ -104,6 +104,37 @@ _BODIES: dict[str, str] = {
   Si no creaste esta cuenta podés ignorar este email.
 </p>""",
 
+    "compra_pendiente": """\
+<h1 style="margin:0 0 16px;color:#9A8BC2;font-size:28px;font-weight:700;line-height:1.3;
+           font-family:'Nunito Sans',Arial,sans-serif;">
+  Hola,<br>{{name}}
+</h1>
+<p style="margin:0 0 12px;color:#6B6B6B;font-size:15px;line-height:1.8;font-weight:300;">
+  Te inscribiste a <strong>{{capacitacion}}</strong> y todavía no nos figura el pago.
+</p>
+{{boton_pago_html}}
+<p style="margin:28px 0 0;color:#6B6B6B;font-size:14px;line-height:1.7;font-weight:300;">
+  <strong>¿Ya pagaste?</strong> Puede ser que todavía no lo hayamos registrado.
+  Avisanos desde la plataforma y adjuntá el comprobante: lo revisamos y te
+  habilitamos el acceso.
+</p>
+<table role="presentation" cellspacing="0" cellpadding="0" style="margin:16px auto 0;">
+  <tr>
+    <td style="border-radius:7px;border:1px solid #5EC0CF;">
+      <a href="{{avisar_url}}"
+         style="display:inline-block;padding:10px 24px;color:#0099b0;text-decoration:none;
+                font-size:14px;font-weight:600;border-radius:7px;
+                font-family:'Nunito Sans',Arial,sans-serif;">
+        Ya pagué, avisar
+      </a>
+    </td>
+  </tr>
+</table>
+<p style="margin:32px 0 0;color:#BBBBBB;font-size:12px;font-weight:300;">
+  Si ya no te interesa, podés ignorar este mensaje: no te vamos a volver a
+  escribir por esto.
+</p>""",
+
     "pin_reset": """\
 <h1 style="margin:0 0 16px;color:#9A8BC2;font-size:28px;font-weight:700;line-height:1.3;
            font-family:'Nunito Sans',Arial,sans-serif;">
