@@ -48,6 +48,8 @@ tienen `ALTER` que fallan si ya se aplicaron (revisar antes de repetir).
 | 23 | `23_avisos_de_pago.sql` | `payment_claims` — el "ya pagué" con comprobante, antes de que un admin lo confirme |
 | 24 | `24_intenciones_de_compra.sql` | `purchase_intents` — quién se registró para comprar qué y todavía no pagó (alimenta el recordatorio a las 24 h) |
 | 25 | ⚠️ `25_inventario_y_puesto_de_venta.sql` | Une los dos catálogos: `stand_products.inventory_item_id` + alta en `inventario` de los productos que ya existían. El stock pasa a salir del inventario |
+| 26 | `26_unificar_merch_duplicado.sql` | **No aplicó.** Apuntaba a un diagnóstico equivocado (ítems duplicados sin fila en góndola); correrlo no borró nada ni hizo daño. El problema real lo arregla el 27 |
+| 27 | `27_borrar_inventario_de_productos_dados_de_baja.sql` | Borra los ítems de `inventario` que el 25 creó para productos del puesto **dados de baja** (`is_active = 0`) y sin ventas. Antes rescata lo que se hubiera cargado a mano en ellos |
 
 `15_encuestas.sql` va **antes** que `16_certificados_emitidos.sql`: un certificado
 referencia el intento de evaluación que lo habilitó.

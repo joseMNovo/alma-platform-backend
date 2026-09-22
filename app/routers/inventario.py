@@ -211,22 +211,38 @@ def delete_inventario(id: int, db: Session = Depends(get_db)):
         log_warn("Ítem de inventario no encontrado para eliminar", module="inventario", action="delete_item", meta={"id": id})
         raise HTTPException(status_code=404, detail="Ítem de inventario no encontrado")
 
-    # La FK de la góndola es RESTRICT, así que borrar esto explotaría con un
-    # error de base. Mejor decirlo en castellano y de paso explicar la salida:
-    # sacarlo de la venta no borra las ventas viejas, que es justo lo que
-    # RESTRICT está protegiendo.
-    gondola = db.query(StandProduct).filter(StandProduct.inventory_item_id == id).first()
-    if gondola:
+    # Lo que impide borrar NO es estar en la góndola: es tener ventas.
+    #
+    # La primera versión de esto bloqueaba con solo existir la fila de góndola,
+    # y mandaba a destildar "Para vender" para poder borrar. Pero destildar es
+    # baja LÓGICA: la fila queda con is_active = 0, así que el ítem no se podía
+    # borrar nunca y el mensaje pedía algo que no servía de nada.
+    #
+    # Se cuentan TODAS las líneas de venta, anuladas incluidas: la foreign key
+    # de `stand_sale_items` no distingue, y es ella la que manda acá.
+    gondolas = db.query(StandProduct).filter(StandProduct.inventory_item_id == id).all()
+    con_ventas = [
+        g for g in gondolas
+        if db.query(StandSaleItem.id).filter(StandSaleItem.product_id == g.id).first()
+    ]
+    if con_ventas:
         raise HTTPException(
             status_code=409,
             detail=(
-                "Este ítem está en el puesto de venta y no se puede borrar sin "
-                "perder el historial de ventas. Destildá 'Para vender' para "
-                "sacarlo de la góndola."
+                "Este ítem tiene ventas registradas en el puesto y borrarlo se "
+                "llevaría ese historial. Si no querés que siga a la venta, "
+                "destildá 'Para vender': lo saca de la góndola y conserva las ventas."
             ),
         )
 
     try:
+        # Sin ventas colgando, la fila de góndola no sostiene nada: se va con
+        # el ítem. Dejarla huérfana apuntando a un inventario que ya no existe
+        # es justo lo que la FK está para impedir.
+        for g in gondolas:
+            db.delete(g)
+        db.flush()
+
         db.delete(item)
         db.commit()
         log_info("Ítem de inventario eliminado", module="inventario", action="delete_item", meta={"id": id})
