@@ -22,13 +22,17 @@ no *lo recaudado*. Si entró una donación y nadie la cargó, acá no está.
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from typing import Optional
+import base64
 from decimal import Decimal
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 
 from app.database import get_db
 from app.models.access import PersonPayment
 from app.models.stand import StandSale
+from app.models.participant import ParticipantProfile
+from app.utils.timezone import ar_date_to_server
 from app.utils.logger import log_error
+from app.services import reportes
 
 router = APIRouter()
 
@@ -162,3 +166,186 @@ def resumen(year: Optional[int] = Query(None), db: Session = Depends(get_db)):
         log_error("Error al armar el resumen de ingresos", module="ingresos",
                   action="resumen", meta={"year": year}, exc_info=True)
         raise
+
+
+# -- Informe descargable -----------------------------------------------
+
+def _movimientos(db: Session, desde: date, hasta: date) -> list[dict]:
+    """Los ingresos del periodo, de las dos fuentes, en una sola lista.
+
+    Se arma aca y no en `resumen` porque el informe necesita el DETALLE fila
+    por fila, no los totales. Los dos leen las mismas tablas con el mismo
+    criterio de fechas, asi que no pueden dar numeros distintos.
+    """
+    filas = []
+
+    pagos = (
+        db.query(PersonPayment)
+        .filter(PersonPayment.paid_at >= desde, PersonPayment.paid_at <= hasta)
+        .all()
+    )
+    personas = {}
+    if pagos:
+        ids = [p.person_id for p in pagos]
+        personas = {
+            x.id: f"{x.name or ''} {x.last_name or ''}".strip()
+            for x in db.query(ParticipantProfile).filter(ParticipantProfile.id.in_(ids)).all()
+        }
+
+    for p in pagos:
+        filas.append({
+            "fecha": p.paid_at,
+            "origen": _etiqueta(p.concept_type or "otros"),
+            "concepto": p.concept_label or "-",
+            "persona": personas.get(p.person_id) or "-",
+            "medio": _medio(p.method),
+            "monto": Decimal(str(p.amount or 0)),
+        })
+
+    ventas = (
+        db.query(StandSale)
+        .filter(
+            StandSale.is_void == 0,
+            StandSale.created_at >= ar_date_to_server(desde),
+            StandSale.created_at < ar_date_to_server(hasta, dia_siguiente=True),
+        )
+        .all()
+    )
+    for v in ventas:
+        filas.append({
+            "fecha": v.created_at.date() if v.created_at else None,
+            "origen": _etiqueta("stand"),
+            "concepto": "Venta del puesto",
+            "persona": v.customer_name or "-",
+            "medio": _medio(v.payment_method),
+            "monto": Decimal(str(v.total or 0)),
+        })
+
+    filas.sort(key=lambda f: (f["fecha"] or date.min), reverse=True)
+    return filas
+
+
+@router.get("/informe")
+def informe(
+    formato: str = Query("pdf", pattern="^(pdf|xlsx)$"),
+    desde: Optional[date] = Query(None),
+    hasta: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Informe de ingresos (Academia + puesto de venta) en PDF o Excel.
+
+    Sin fechas toma el anio en curso: un informe de "todo el historial" de la
+    plata rara vez es lo que alguien quiere, y en cambio equivocarse de rango
+    y bajar diez anios si molesta.
+    """
+    hoy = date.today()
+    desde = desde or date(hoy.year, 1, 1)
+    hasta = hasta or hoy
+
+    filas = _movimientos(db, desde, hasta)
+    total = sum((f["monto"] for f in filas), Decimal("0"))
+
+    por_origen: dict = {}
+    por_medio: dict = {}
+    for f in filas:
+        por_origen[f["origen"]] = por_origen.get(f["origen"], Decimal("0")) + f["monto"]
+        por_medio[f["medio"]] = por_medio.get(f["medio"], Decimal("0")) + f["monto"]
+
+    periodo = f"Del {desde.strftime('%d/%m/%Y')} al {hasta.strftime('%d/%m/%Y')}"
+    sufijo = hoy.isoformat()
+
+    if formato == "xlsx":
+        contenido = reportes.xlsx_informe([
+            reportes.Hoja(
+                "Movimientos",
+                [("Fecha", "fecha"), ("Origen", "texto"), ("Concepto", "texto"),
+                 ("Persona", "texto"), ("Medio de pago", "texto"), ("Monto", "moneda")],
+                [[f["fecha"], f["origen"], f["concepto"], f["persona"],
+                  f["medio"].capitalize(), float(f["monto"])] for f in filas],
+            ),
+            reportes.Hoja(
+                "Resumen por origen",
+                [("Origen", "texto"), ("Monto", "moneda")],
+                [[k, float(v)] for k, v in sorted(por_origen.items(), key=lambda x: -x[1])],
+            ),
+            reportes.Hoja(
+                "Medio de pago",
+                [("Medio", "texto"), ("Monto", "moneda")],
+                [[k.capitalize(), float(v)] for k, v in sorted(por_medio.items(), key=lambda x: -x[1])],
+            ),
+        ], periodo)
+        return {
+            "filename": f"ingresos-{sufijo}.xlsx",
+            "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "base64": base64.b64encode(contenido).decode(),
+        }
+
+    sin_fecha = db.query(PersonPayment).filter(PersonPayment.paid_at.is_(None)).count()
+    nota = None
+    if sin_fecha:
+        nota = (f"<b>{sin_fecha} pago{'' if sin_fecha == 1 else 's'} "
+                f"sin fecha</b> no "
+                f"{'entra' if sin_fecha == 1 else 'entran'} en ningun periodo, "
+                f"asi que no "
+                f"{'esta sumado' if sin_fecha == 1 else 'estan sumados'} "
+                "en este informe.")
+
+    # El detalle, cortado por dia. `_movimientos` ya los devuelve del mas
+    # nuevo al mas viejo, asi que alcanza con mirar cuando cambia la fecha.
+    grupos = []
+    actual = None
+    for f in filas:
+        if actual is None or actual["dia"] != f["fecha"]:
+            actual = {"dia": f["fecha"], "filas": [], "total": Decimal("0")}
+            grupos.append(actual)
+        actual["total"] += f["monto"]
+        actual["filas"].append([
+            f["origen"],
+            f["concepto"][:52],
+            f["persona"][:26] or "\u2014",
+            f["medio"].capitalize(),
+            reportes.pesos(f["monto"]),
+        ])
+
+    promedio = (total / len(filas)) if filas else Decimal("0")
+
+    contenido = reportes.pdf_informe(
+        titulo="Informe de ingresos",
+        subtitulo=f"Academia y puesto de venta \u00b7 {reportes.periodo_corto(desde, hasta)}",
+        kpis=[
+            ("Total ingresado", reportes.pesos(total)),
+            ("Movimientos", str(len(filas))),
+            ("Promedio por movimiento", reportes.pesos(promedio)),
+        ],
+        izquierda=reportes.Barras(
+            "De donde viene",
+            [(k, float(v)) for k, v in por_origen.items()],
+        ),
+        derecha=(
+            [reportes.Apilada("Como entro",
+                              [(k.capitalize(), float(v)) for k, v in por_medio.items()])]
+            + ([reportes.Aviso(nota)] if nota else [])
+        ),
+        tabla_titulo="Detalle de movimientos",
+        tabla_columnas=["Origen", "Concepto", "Persona", "Medio", "Monto"],
+        tabla_anchos=[66, 186, 96, 76, 80],
+        grupos=[
+            reportes.Grupo(
+                titulo=reportes.dia_corto(g["dia"]) if g["dia"] else "Sin fecha",
+                detalle=f"{len(g['filas'])} movimiento"
+                        + ("" if len(g["filas"]) == 1 else "s"),
+                total=reportes.pesos(g["total"]),
+                filas=g["filas"],
+            )
+            for g in grupos
+        ],
+        total_label="Total del periodo",
+        total_valor=reportes.pesos(total),
+        pie=f"Comunidad alma \u00b7 Informe de ingresos \u00b7 "
+            f"{reportes.periodo_corto(desde, hasta)}",
+    )
+    return {
+        "filename": f"ingresos-{sufijo}.pdf",
+        "mime": "application/pdf",
+        "base64": base64.b64encode(contenido).decode(),
+    }

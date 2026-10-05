@@ -23,8 +23,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
+import base64
 from decimal import Decimal
-from datetime import date
+from datetime import date, datetime, time, timedelta
 
 from app.database import get_db
 from app.models.stand import StandProduct, StandSale, StandSaleItem
@@ -34,7 +35,8 @@ from app.schemas.stand import (
     StandSaleCreate, StandSaleOut, StandSummary,
 )
 from app.utils.logger import log_info, log_warn, log_error
-from app.utils.timezone import AR_TZ
+from app.services import reportes
+from app.utils.timezone import AR_TZ, ar_date_to_server
 
 router = APIRouter()
 
@@ -316,12 +318,45 @@ def create_sale(data: StandSaleCreate, db: Session = Depends(get_db)):
     return _serializar_venta(venta, productos)
 
 
-@router.get("/sales", response_model=List[StandSaleOut])
-def list_sales(limit: int = Query(50), incluir_anuladas: bool = Query(True), db: Session = Depends(get_db)):
+def _ventas_del_rango(
+    db: Session,
+    desde: Optional[date] = None,
+    hasta: Optional[date] = None,
+    incluir_anuladas: bool = True,
+    limit: Optional[int] = None,
+) -> List[StandSale]:
+    """Las ventas de un período, de la más nueva a la más vieja.
+
+    `hasta` se compara contra el día SIGUIENTE a medianoche: `created_at` es un
+    TIMESTAMP, así que con `<= hasta` una venta de las 15:40 del último día
+    quedaría afuera y nadie entendería por qué falta.
+    """
     q = db.query(StandSale)
     if not incluir_anuladas:
         q = q.filter(StandSale.is_void == 0)
-    ventas = q.order_by(StandSale.created_at.desc(), StandSale.id.desc()).limit(limit).all()
+    if desde:
+        q = q.filter(StandSale.created_at >= ar_date_to_server(desde))
+    if hasta:
+        q = q.filter(StandSale.created_at < ar_date_to_server(hasta, dia_siguiente=True))
+    q = q.order_by(StandSale.created_at.desc(), StandSale.id.desc())
+    return q.limit(limit).all() if limit else q.all()
+
+
+@router.get("/sales", response_model=List[StandSaleOut])
+def list_sales(
+    limit: int = Query(50, le=5000),
+    incluir_anuladas: bool = Query(True),
+    # Con fechas, el `limit` deja de mandar: el período es el recorte. Sin
+    # esto el historial mostraba siempre las últimas 50 y, pasadas esas,
+    # escondía las viejas sin avisar.
+    desde: Optional[date] = Query(None),
+    hasta: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    hay_rango = bool(desde or hasta)
+    ventas = _ventas_del_rango(
+        db, desde, hasta, incluir_anuladas, limit=None if hay_rango else limit
+    )
     return [_serializar_venta(v) for v in ventas]
 
 
@@ -408,3 +443,259 @@ def summary(db: Session = Depends(get_db)):
             for pid, nombre, u, r in filas
         ],
     )
+
+
+# -- Informe descargable -----------------------------------------------
+
+def _medio_legible(medio: str) -> str:
+    return {"efectivo": "Efectivo", "transferencia": "Transferencia"}.get(medio, medio or "-")
+
+
+def _datos_informe(db: Session, desde: Optional[date], hasta: Optional[date]) -> dict:
+    """Junta todo lo que necesitan el PDF y el Excel. Una sola consulta, dos
+    formatos: si cada uno armara lo suyo, tarde o temprano darian numeros
+    distintos para el mismo periodo."""
+    ventas = _ventas_del_rango(db, desde, hasta, incluir_anuladas=True)
+    vivas = [v for v in ventas if not v.is_void]
+    anuladas = len(ventas) - len(vivas)
+
+    productos = {p.id: p for p in db.query(StandProduct).all()}
+
+    total = sum((Decimal(str(v.total or 0)) for v in vivas), Decimal("0"))
+    unidades = sum(r.quantity for v in vivas for r in v.items)
+
+    por_producto: dict = {}
+    for v in vivas:
+        for r in v.items:
+            p = productos.get(r.product_id)
+            nombre = (p.inventory_item.name if p and p.inventory_item else (p.name if p else "Producto eliminado"))
+            acc = por_producto.setdefault(nombre, {"unidades": 0, "monto": Decimal("0")})
+            acc["unidades"] += r.quantity
+            acc["monto"] += Decimal(str(r.unit_price or 0)) * r.quantity
+
+    por_medio: dict = {}
+    for v in vivas:
+        clave = _medio_legible(v.payment_method)
+        por_medio[clave] = por_medio.get(clave, Decimal("0")) + Decimal(str(v.total or 0))
+
+    return {
+        "ventas": ventas,
+        "vivas": vivas,
+        "anuladas": anuladas,
+        "productos": productos,
+        "total": total,
+        "unidades": unidades,
+        "ticket": (total / len(vivas)) if vivas else Decimal("0"),
+        "por_producto": por_producto,
+        "por_medio": por_medio,
+    }
+
+
+def _nombre_producto(d: dict, product_id: int) -> str:
+    p = d["productos"].get(product_id)
+    if not p:
+        return "Producto eliminado"
+    return p.inventory_item.name if p.inventory_item else p.name
+
+
+@router.get("/informe")
+def informe(
+    formato: str = Query("pdf", pattern="^(pdf|xlsx)$"),
+    desde: Optional[date] = Query(None),
+    hasta: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Informe de ventas del puesto, en PDF o Excel.
+
+    Devuelve el archivo en base64 dentro de un JSON. Es lo que encaja con el
+    `api-client` del front, que habla JSON y nada mas. A esta escala el 33%
+    que infla base64 es irrelevante; con decenas de miles de ventas habria
+    que pasar a stream.
+    """
+    d = _datos_informe(db, desde, hasta)
+    periodo = _texto_periodo(desde, hasta)
+    sufijo = date.today().isoformat()
+
+    if formato == "xlsx":
+        contenido = _informe_xlsx(d, periodo)
+        return {
+            "filename": f"ventas-puesto-{sufijo}.xlsx",
+            "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "base64": base64.b64encode(contenido).decode(),
+        }
+
+    contenido = _informe_pdf(d, _periodo_pdf(d, desde, hasta))
+    return {
+        "filename": f"ventas-puesto-{sufijo}.pdf",
+        "mime": "application/pdf",
+        "base64": base64.b64encode(contenido).decode(),
+    }
+
+
+def _periodo_pdf(d: dict, desde: Optional[date], hasta: Optional[date]) -> str:
+    """El periodo, en corto y para el membrete.
+
+    Sin rango elegido dice "Todo el historial" Y entre parentesis desde cuando
+    hasta cuando hay datos. Las dos cosas: la primera explica por que no hay
+    filtro, la segunda evita que alguien lea el total como si cubriera anios
+    que todavia no existen.
+    """
+    if desde or hasta:
+        return reportes.periodo_corto(desde, hasta)
+
+    fechas = [_con_huso(v.created_at) for v in d["ventas"]]
+    fechas = [f.date() for f in fechas if f]
+    if not fechas:
+        return "Todo el historial"
+    return f"Todo el historial ({reportes.periodo_corto(min(fechas), max(fechas))})"
+
+
+def _texto_periodo(desde: Optional[date], hasta: Optional[date]) -> str:
+    if desde and hasta:
+        return f"Del {desde.strftime('%d/%m/%Y')} al {hasta.strftime('%d/%m/%Y')}"
+    if desde:
+        return f"Desde el {desde.strftime('%d/%m/%Y')}"
+    if hasta:
+        return f"Hasta el {hasta.strftime('%d/%m/%Y')}"
+    return "Todo el historial"
+
+
+def _informe_pdf(d: dict, periodo: str) -> bytes:
+    """El PDF de ventas, agrupado por jornada.
+
+    El corte por dia no es decorativo: el puesto trabaja por jornadas (una
+    feria, un sabado en el Monumento) y la pregunta que se hace despues es
+    "cuanto hicimos ese dia". Con una lista corrida habia que sumar a mano.
+    """
+    grupos = []
+    actual = None
+    for v in d["ventas"]:
+        cuando = _con_huso(v.created_at)
+        dia = cuando.date() if cuando else None
+
+        if actual is None or actual["dia"] != dia:
+            actual = {"dia": dia, "filas": [], "anuladas": set(),
+                      "vivas": 0, "muertas": 0, "total": Decimal("0")}
+            grupos.append(actual)
+
+        detalle = ", ".join(
+            f"{r.quantity}x {_nombre_producto(d, r.product_id)}" for r in v.items
+        ) or "-"
+        if v.is_void:
+            actual["anuladas"].add(len(actual["filas"]))
+            actual["muertas"] += 1
+        else:
+            actual["vivas"] += 1
+            actual["total"] += Decimal(str(v.total or 0))
+
+        actual["filas"].append([
+            cuando.strftime("%H:%M") if cuando else "-",
+            detalle,
+            _medio_legible(v.payment_method),
+            reportes.pesos(v.total),
+        ])
+
+    def rotulo(g: dict) -> str:
+        partes = [f"{g['vivas']} venta" + ("" if g["vivas"] == 1 else "s")]
+        if g["muertas"]:
+            partes.append(f"{g['muertas']} anulada" + ("" if g["muertas"] == 1 else "s"))
+        return " + ".join(partes)
+
+    # El precio unitario sale de dividir lo recaudado por las unidades. Si un
+    # producto cambio de precio dentro del periodo es un promedio, y es lo
+    # correcto: el informe tiene que cerrar con el total, no con la lista de
+    # precios de hoy.
+    ranking = [
+        (nombre,
+         v["unidades"],
+         float(v["monto"]) / v["unidades"] if v["unidades"] else 0,
+         float(v["monto"]))
+        for nombre, v in d["por_producto"].items()
+    ]
+
+    derecha = [reportes.Apilada("Medio de pago",
+                                [(k, float(v)) for k, v in d["por_medio"].items()])]
+    if d["anuladas"]:
+        derecha.append(reportes.Aviso(
+            f"<b>{d['anuladas']} venta{'' if d['anuladas'] == 1 else 's'} anulada"
+            f"{'' if d['anuladas'] == 1 else 's'}</b> no "
+            f"{'esta' if d['anuladas'] == 1 else 'estan'} incluida"
+            f"{'' if d['anuladas'] == 1 else 's'} en los totales. "
+            f"Aparece{'' if d['anuladas'] == 1 else 'n'} tachada"
+            f"{'' if d['anuladas'] == 1 else 's'} en el detalle."
+        ))
+
+    return reportes.pdf_informe(
+        titulo="Informe de ventas",
+        subtitulo=f"Puesto de venta \u00b7 {periodo}",
+        kpis=[
+            ("Recaudado", reportes.pesos(d["total"])),
+            ("Ventas", str(len(d["vivas"]))),
+            ("Unidades", str(d["unidades"])),
+            ("Ticket promedio", reportes.pesos(d["ticket"])),
+        ],
+        izquierda=reportes.Ranking("Por producto", ranking),
+        derecha=derecha,
+        tabla_titulo="Detalle de ventas",
+        tabla_columnas=["Hora", "Productos", "Medio", "Total"],
+        tabla_anchos=[48, 276, 96, 84],
+        grupos=[
+            reportes.Grupo(
+                titulo=reportes.dia_corto(g["dia"]) if g["dia"] else "Sin fecha",
+                detalle=rotulo(g),
+                total=reportes.pesos(g["total"]),
+                filas=g["filas"],
+                anuladas=g["anuladas"],
+            )
+            for g in grupos
+        ],
+        total_label=f"Total recaudado \u00b7 {len(d['vivas'])} venta"
+                    + ("" if len(d["vivas"]) == 1 else "s"),
+        total_valor=reportes.pesos(d["total"]),
+        pie=f"Comunidad alma \u00b7 Informe de ventas \u00b7 Puesto de venta",
+    )
+
+
+def _informe_xlsx(d: dict, periodo: str) -> bytes:
+    # Hoja 1: una fila por RENGLON vendido. Permite las dos lecturas desde
+    # Excel: sumar la columna Subtotal da la caja; agrupar por Producto dice
+    # que se vende. Una fila por venta no deja hacer lo segundo.
+    detalle = []
+    for v in d["ventas"]:
+        cuando = _con_huso(v.created_at)
+        for r in v.items:
+            detalle.append([
+                cuando.date() if cuando else None,
+                cuando.time().replace(microsecond=0) if cuando else None,
+                _nombre_producto(d, r.product_id),
+                r.quantity,
+                float(r.unit_price or 0),
+                float(Decimal(str(r.unit_price or 0)) * r.quantity),
+                _medio_legible(v.payment_method),
+                "Si" if v.is_void else "No",
+            ])
+
+    resumen = [[k, v["unidades"], float(v["monto"])]
+               for k, v in sorted(d["por_producto"].items(), key=lambda x: -x[1]["monto"])]
+
+    medios = [[k, float(v)] for k, v in d["por_medio"].items()]
+
+    return reportes.xlsx_informe([
+        reportes.Hoja(
+            "Ventas",
+            [("Fecha", "fecha"), ("Hora", "hora"), ("Producto", "texto"),
+             ("Cantidad", "numero"), ("Precio unitario", "moneda"),
+             ("Subtotal", "moneda"), ("Medio de pago", "texto"), ("Anulada", "texto")],
+            detalle,
+        ),
+        reportes.Hoja(
+            "Resumen por producto",
+            [("Producto", "texto"), ("Unidades", "numero"), ("Recaudado", "moneda")],
+            resumen,
+        ),
+        reportes.Hoja(
+            "Medio de pago",
+            [("Medio", "texto"), ("Recaudado", "moneda")],
+            medios,
+        ),
+    ], periodo)

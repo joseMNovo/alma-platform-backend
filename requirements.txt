@@ -15,3 +15,6 @@ tzdata
 # Certificados en PDF (app/services/certificate_pdf.py). Python puro: no
 # necesita GTK ni librerías del sistema, por eso se eligió sobre WeasyPrint.
 reportlab==4.2.5
+# Informes en Excel (app/services/reportes.py). Python puro, sin
+# librerias de sistema: mismo criterio que reportlab sobre WeasyPrint.
+openpyxl==3.1.5
