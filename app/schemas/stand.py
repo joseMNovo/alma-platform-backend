@@ -77,6 +77,16 @@ class StandSaleCreate(BaseModel):
     customer_name: Optional[str] = None
     customer_email: Optional[str] = None
 
+    # Identificador que genera el TELÉFONO antes de mandar nada. Si la venta
+    # llega dos veces —por reintento, por archivo importado, o por las dos
+    # cosas— la segunda se reconoce y se ignora. Ver app/models/stand.py.
+    client_uuid: Optional[str] = None
+
+    # Cuándo ocurrió de verdad, para las ventas que viajaron después. Sin
+    # esto, una jornada del sábado entera aparecía con fecha del lunes, que es
+    # cuando el teléfono recuperó señal.
+    occurred_at: Optional[datetime] = None
+
     @field_validator("customer_name", "customer_email", mode="before")
     @classmethod
     def _vacio_es_nulo(cls, v):
@@ -122,7 +132,20 @@ class StandSaleOut(BaseModel):
     customer_email: Optional[str] = None
     is_void: bool = False
     created_at: Optional[datetime] = None
+    client_uuid: Optional[str] = None
+    origen: str = "vivo"
     items: List[StandSaleItemOut] = []
+
+
+class StandSyncResult(BaseModel):
+    """Qué pasó con cada venta del lote que se mandó a sincronizar."""
+
+    creadas: int = 0
+    repetidas: int = 0
+    # (client_uuid, motivo) de las que no se pudieron cargar. Se devuelven en
+    # vez de cortar el lote: una venta con un producto borrado no puede hacer
+    # que se pierdan las otras trece.
+    rechazadas: List[dict] = []
 
 
 # ── Caja ───────────────────────────────────────────────────────────────

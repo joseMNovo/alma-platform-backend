@@ -60,6 +60,27 @@ class StandSale(Base):
     is_void = Column(Integer, nullable=False, default=0)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
+    # ── Ventas que no nacieron contra el servidor ──────────────────────
+    #
+    # El puesto trabaja donde la señal es mala. Una venta se cobra igual, se
+    # guarda en el teléfono y llega después: por reintento automático o por un
+    # archivo que alguien importa.
+    #
+    # `client_uuid` lo genera el teléfono ANTES de mandar nada, y es lo que
+    # hace que los dos caminos no se pisen. Tres casos reales:
+    #   · el POST llega pero la respuesta se pierde → el teléfono reintenta
+    #   · se exporta el archivo Y además el teléfono recupera señal
+    #   · alguien importa dos veces el mismo archivo
+    # En los tres, la segunda vez se reconoce y se ignora.
+    #
+    # NULL permitido: las ventas anteriores a esto no lo tienen, y en MySQL un
+    # índice único convive con cuantos NULL hagan falta.
+    client_uuid = Column(String(36), nullable=True, unique=True)
+
+    # Por dónde entró: vivo | cola | importada. Cuando la caja no cierra,
+    # saber por qué camino llegó una venta es la mitad de la respuesta.
+    origen = Column(String(12), nullable=False, default="vivo")
+
     items = relationship("StandSaleItem", back_populates="sale",
                          cascade="all, delete-orphan", lazy="joined")
 

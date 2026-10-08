@@ -32,7 +32,7 @@ from app.models.stand import StandProduct, StandSale, StandSaleItem
 from app.models.inventario import Inventario
 from app.schemas.stand import (
     StandProductCreate, StandProductUpdate, StandProductOut,
-    StandSaleCreate, StandSaleOut, StandSummary,
+    StandSaleCreate, StandSaleOut, StandSummary, StandSyncResult,
 )
 from app.utils.logger import log_info, log_warn, log_error
 from app.services import reportes
@@ -233,6 +233,16 @@ def create_sale(data: StandSaleCreate, db: Session = Depends(get_db)):
     El precio sale de la BASE, nunca del body: si lo mandara el navegador,
     quien cobra podría enviar cualquier número y la caja no cerraría jamás.
     """
+    # Si esta venta ya entró, se devuelve la que hay en vez de crear otra.
+    # Pasa de verdad: el POST llega, la respuesta se pierde en el camino, y el
+    # teléfono reintenta creyendo que falló.
+    if data.client_uuid:
+        ya = db.query(StandSale).filter(StandSale.client_uuid == data.client_uuid).first()
+        if ya:
+            log_info("Venta repetida ignorada", module="stand", action="create_sale_repetida",
+                     meta={"client_uuid": data.client_uuid, "id": ya.id})
+            return _serializar_venta(ya, {})
+
     ids = [i.product_id for i in data.items]
     productos = {p.id: p for p in db.query(StandProduct).filter(StandProduct.id.in_(ids)).all()}
     faltantes = [i for i in ids if i not in productos]
@@ -281,6 +291,8 @@ def create_sale(data: StandSaleCreate, db: Session = Depends(get_db)):
             notes=data.notes,
             customer_name=data.customer_name,
             customer_email=data.customer_email,
+            client_uuid=data.client_uuid,
+            origen="vivo",
         )
         db.add(venta)
         db.flush()
@@ -316,6 +328,112 @@ def create_sale(data: StandSaleCreate, db: Session = Depends(get_db)):
         raise
 
     return _serializar_venta(venta, productos)
+
+
+def _a_hora_servidor(dt: datetime) -> datetime:
+    """Pasa la fecha que mandó el teléfono al reloj con el que guarda MySQL.
+
+    Los TIMESTAMP de la base son fechas "peladas" en hora del VPS, que corre en
+    Europe/Berlin. El teléfono manda ISO con huso. Sin convertir, una venta de
+    las 15:40 de Rosario se guardaba como las 15:40 de Berlín y aparecía cinco
+    horas corrida en el historial.
+    """
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone().replace(tzinfo=None)
+
+
+@router.post("/sales/sync", response_model=StandSyncResult)
+def sync_sales(
+    lote: List[StandSaleCreate],
+    origen: str = Query("cola", pattern="^(cola|importada)$"),
+    db: Session = Depends(get_db),
+):
+    """Carga ventas que YA OCURRIERON: la cola del teléfono y el archivo importado.
+
+    Es otro endpoint y no un parámetro de `create_sale` por una diferencia que
+    no es de forma, es de significado:
+
+        POST /sales       → "cobrá esto"    · puede decir que no
+        POST /sales/sync  → "esto se cobró" · solo puede acusar recibo
+
+    **Acá el stock NO se valida.** La plata ya se cobró en la mano: rechazar
+    la venta no devuelve la mercadería, solo borra el registro de algo que
+    pasó. Si el stock queda negativo, queda negativo — y eso no significa que
+    se vendió de más, significa que el inventario cargado no coincidía con lo
+    que había en la caja. Es información, y la pantalla de Stock la muestra.
+
+    Idempotente por `client_uuid`: el mismo lote se puede mandar las veces que
+    haga falta. Es lo que permite exportar un archivo Y que además el teléfono
+    sincronice solo cuando recupere señal, sin duplicar la caja.
+    """
+    resultado = {"creadas": 0, "repetidas": 0, "rechazadas": []}
+
+    for data in lote:
+        uuid = data.client_uuid
+        if not uuid:
+            resultado["rechazadas"].append({"client_uuid": None, "motivo": "Venta sin identificador"})
+            continue
+
+        if db.query(StandSale.id).filter(StandSale.client_uuid == uuid).first():
+            resultado["repetidas"] += 1
+            continue
+
+        ids = [i.product_id for i in data.items]
+        productos = {p.id: p for p in db.query(StandProduct).filter(StandProduct.id.in_(ids)).all()}
+        if any(i not in productos for i in ids):
+            resultado["rechazadas"].append({"client_uuid": uuid, "motivo": "Tiene un producto que ya no existe"})
+            continue
+
+        try:
+            venta = StandSale(
+                payment_method=data.payment_method,
+                total=Decimal("0"),
+                sold_by_volunteer_id=data.sold_by_volunteer_id,
+                notes=data.notes,
+                customer_name=data.customer_name,
+                customer_email=data.customer_email,
+                client_uuid=uuid,
+                origen=origen,
+            )
+            # La fecha REAL de la venta, no la de la sincronización. Sin esto
+            # una feria del sábado aparecía fechada el lunes.
+            if data.occurred_at:
+                venta.created_at = _a_hora_servidor(data.occurred_at)
+            db.add(venta)
+            db.flush()
+
+            # El precio sale igual de la base y no del archivo: si viniera de
+            # afuera, cualquiera podría editar el JSON antes de importarlo.
+            total = Decimal("0")
+            pedido: dict = {}
+            for item in data.items:
+                prod = productos[item.product_id]
+                precio = Decimal(str(prod.unit_price))
+                total += precio * item.quantity
+                db.add(StandSaleItem(sale_id=venta.id, product_id=prod.id,
+                                     quantity=item.quantity, unit_price=precio))
+                if prod.inventory_item_id:
+                    pedido[prod.inventory_item_id] = pedido.get(prod.inventory_item_id, 0) + item.quantity
+
+            venta.total = total
+
+            if pedido:
+                for inv in db.query(Inventario).filter(Inventario.id.in_(list(pedido.keys()))).all():
+                    # Puede quedar negativo, y está bien. Ver el docstring.
+                    inv.quantity -= pedido[inv.id]
+
+            db.commit()
+            resultado["creadas"] += 1
+        except Exception:
+            db.rollback()
+            log_error("Error al sincronizar una venta", module="stand",
+                      action="sync_sale", meta={"client_uuid": uuid}, exc_info=True)
+            resultado["rechazadas"].append({"client_uuid": uuid, "motivo": "No se pudo cargar"})
+
+    log_info("Ventas sincronizadas", module="stand", action="sync_sales",
+             meta={k: (v if k != "rechazadas" else len(v)) for k, v in resultado.items()})
+    return resultado
 
 
 def _ventas_del_rango(
