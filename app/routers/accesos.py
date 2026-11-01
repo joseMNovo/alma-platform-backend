@@ -257,16 +257,32 @@ def audit_log(
     person_id: Optional[int] = Query(None),
     module_key: Optional[str] = Query(None),
     limit: int = Query(100, le=500),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
-    """Historia de habilitaciones. Append-only: acá se ve quién hizo qué."""
+    """Historia de habilitaciones. Append-only: acá se ve quién hizo qué.
+
+    Se lee de a tandas (`limit`/`offset`), del movimiento más nuevo al más
+    viejo. La tabla no se limpia nunca, así que sin salteo todo lo anterior
+    al tope quedaba fuera del alcance de la aplicación.
+
+    Entre una tanda y la siguiente puede entrar un movimiento nuevo, que
+    corre la lista un lugar y hace repetir el último de la tanda anterior.
+    El desempate por `id` ordena dentro del mismo segundo; lo que igual se
+    cuele lo descarta el cliente por id.
+    """
     q = db.query(AccessAudit)
     if person_id:
         q = q.filter(AccessAudit.person_id == person_id)
     if module_key:
         q = q.filter(AccessAudit.module_key == module_key)
 
-    rows = q.order_by(AccessAudit.created_at.desc()).limit(limit).all()
+    rows = (
+        q.order_by(AccessAudit.created_at.desc(), AccessAudit.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
     names = {v.id: f"{v.name or ''} {v.last_name or ''}".strip() for v in db.query(Voluntario).all()}
 
