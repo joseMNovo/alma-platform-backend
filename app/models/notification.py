@@ -13,7 +13,9 @@ class Notification(Base):
     body = Column(Text, nullable=True)
     # Qué la generó (para iconografía/agrupación en la campanita)
     kind = Column(
-        Enum("announcement", "calendar_reminder", "calendar_new", "system"),
+        # OJO: es un ENUM de MySQL, no un VARCHAR. Sumar un tipo acá NO alcanza:
+        # hace falta un ALTER TABLE o la fila se guarda vacía. Ver sql/30_cumpleanos.sql.
+        Enum("announcement", "calendar_reminder", "calendar_new", "birthday", "system"),
         nullable=False,
         default="system",
     )

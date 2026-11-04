@@ -3,7 +3,7 @@ from typing import List, Optional
 from datetime import datetime
 
 _USER_TYPES = {"voluntario", "participante"}
-_KINDS = {"announcement", "calendar_reminder", "calendar_new", "system"}
+_KINDS = {"announcement", "calendar_reminder", "calendar_new", "birthday", "system"}
 
 
 class NotificationCreate(BaseModel):

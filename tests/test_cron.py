@@ -319,3 +319,177 @@ def test_los_plurales_concuerdan():
     assert alma_cron._plural(1, "aviso enviado", "avisos enviados") == "1 aviso enviado"
     assert alma_cron._plural(3, "aviso enviado", "avisos enviados") == "3 avisos enviados"
     assert alma_cron._plural(0, "aviso enviado", "avisos enviados") == "0 avisos enviados"
+
+
+# ── Cumpleaños ─────────────────────────────────────────────────────────────
+#
+# Lo que importa acá es lo mismo que en los recordatorios —no mandar dos veces—
+# más dos reglas propias: a quién se saluda y qué día.
+
+@pytest.fixture()
+def cumpleanero():
+    """Una fila como la que devuelve fetch_birthdays."""
+    return {
+        "volunteer_id": 33,
+        "name": "Victoria",
+        "last_name": "Rébori",
+        "email": "victoria@tests.local",
+        "birth_date": date(1985, 7, 28),
+    }
+
+
+def test_el_saludo_usa_la_plantilla_de_cumpleanos(monkeypatch, cumpleanero):
+    payload = {}
+
+    def _falso(request, timeout=None):
+        payload.update(json.loads(request.data))
+        return RespuestaFalsa(201, {"status": "sent"})
+
+    monkeypatch.setattr(alma_cron.urllib.request, "urlopen", _falso)
+    resultado, _ = alma_cron.send_birthday(cumpleanero)
+
+    assert resultado == alma_cron.ACCEPTED
+    assert payload["template"] == "birthday"
+    assert payload["to"] == ["victoria@tests.local"]
+    assert payload["variables"]["name"] == "Victoria"
+    # Sin fecha ni apellido: en el celular el asunto se corta a los ~35.
+    assert payload["subject"] == "¡Feliz cumpleaños!"
+
+
+def test_el_nombre_se_escapa_para_el_html(monkeypatch):
+    """_render hace un replace pelado: un & crudo rompería el HTML del mail."""
+    payload = {}
+
+    def _falso(request, timeout=None):
+        payload.update(json.loads(request.data))
+        return RespuestaFalsa(201, {"status": "sent"})
+
+    monkeypatch.setattr(alma_cron.urllib.request, "urlopen", _falso)
+    alma_cron.send_birthday({
+        "volunteer_id": 1, "name": "Ana & Luis", "last_name": "", "email": "a@tests.local",
+    })
+
+    assert payload["variables"]["name"] == "Ana &amp; Luis"
+
+
+def test_el_timeout_del_saludo_no_se_reintenta(monkeypatch, cumpleanero):
+    """Mismo criterio que los recordatorios: ante la duda, no mandar de nuevo.
+
+    Un "¡Feliz cumpleaños!" duplicado el mismo día es peor que uno que falta:
+    se lee como que nadie está mirando el sistema.
+    """
+    _responder_con(monkeypatch, TimeoutError("se acabó el tiempo"))
+
+    resultado, motivo = alma_cron.send_birthday(cumpleanero)
+
+    assert resultado == alma_cron.UNKNOWN
+    assert "no respondió" in motivo
+
+
+def test_si_resend_lo_rechaza_se_puede_reintentar(monkeypatch, cumpleanero):
+    _responder_con(monkeypatch, RespuestaFalsa(201, {
+        "status": "failed", "error_message": "destinatario inválido",
+    }))
+
+    resultado, motivo = alma_cron.send_birthday(cumpleanero)
+
+    assert resultado == alma_cron.REJECTED
+    assert "destinatario inválido" in motivo
+
+
+# ── Qué día se saluda ──────────────────────────────────────────────────────
+
+class ConsultaFalsa:
+    """Cursor de pymysql de mentira: guarda el SQL y los parámetros."""
+
+    def __init__(self):
+        self.sql = ""
+        self.params = ()
+
+    def execute(self, sql, params=()):
+        self.sql, self.params = sql, params
+
+    def fetchall(self):
+        return []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class ConexionFalsa:
+    def __init__(self):
+        self.cur = ConsultaFalsa()
+
+    def cursor(self):
+        return self.cur
+
+    def commit(self):
+        pass
+
+
+def _consulta_del_dia(hoy: date) -> ConsultaFalsa:
+    conn = ConexionFalsa()
+    alma_cron.fetch_birthdays(conn, hoy)
+    return conn.cur
+
+
+def test_busca_a_los_que_cumplen_hoy():
+    cur = _consulta_del_dia(date(2026, 7, 28))
+
+    assert cur.params[:2] == (7, 28)
+    assert "MONTH(v.birth_date)" in cur.sql
+    assert "29" not in cur.sql  # sin la excepción del bisiesto
+
+
+def test_solo_saluda_a_los_activos():
+    cur = _consulta_del_dia(date(2026, 7, 28))
+
+    # Un pendiente no fue aprobado todavía y un inactivo se fue: a los dos el
+    # saludo les llegaría de una organización en la que no están.
+    assert "activo" in cur.params
+    assert "pendiente" not in cur.params
+    assert "inactivo" not in cur.params
+    assert "v.birth_date IS NOT NULL" in cur.sql
+
+
+def test_al_que_nacio_un_29_de_febrero_se_lo_saluda_el_28():
+    """2026 no es bisiesto: el 28 entra también el 29/02."""
+    cur = _consulta_del_dia(date(2026, 2, 28))
+
+    assert "DAY(v.birth_date) = 29" in cur.sql
+
+
+def test_en_un_bisiesto_el_28_no_arrastra_a_los_del_29():
+    """2028 sí es bisiesto: los del 29 tienen su propio día al día siguiente."""
+    cur = _consulta_del_dia(date(2028, 2, 28))
+
+    assert "DAY(v.birth_date) = 29" not in cur.sql
+
+
+def test_el_año_2100_no_es_bisiesto_aunque_sea_multiplo_de_100():
+    cur = _consulta_del_dia(date(2100, 2, 28))
+
+    assert "DAY(v.birth_date) = 29" in cur.sql
+
+
+def test_el_año_2000_si_es_bisiesto_por_ser_multiplo_de_400():
+    cur = _consulta_del_dia(date(2000, 2, 28))
+
+    assert "DAY(v.birth_date) = 29" not in cur.sql
+
+
+# ── El modo prueba ─────────────────────────────────────────────────────────
+
+def test_sin_la_variable_el_mail_va_a_su_destinatario():
+    assert alma_cron.destinatario("real@alma.org.ar") == ["real@alma.org.ar"]
+
+
+def test_con_la_variable_todos_los_mails_se_desvian(monkeypatch):
+    """CRON_EMAIL_PRUEBA existe para poder correr el cron de verdad sin
+    escribirle a voluntarias reales."""
+    monkeypatch.setattr(alma_cron, "EMAIL_PRUEBA", "manunovo@gmail.com")
+
+    assert alma_cron.destinatario("real@alma.org.ar") == ["manunovo@gmail.com"]

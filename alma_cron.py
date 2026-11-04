@@ -23,6 +23,10 @@ Lógica:
      generoso (ver EMAIL_REQUEST_TIMEOUT) y, si igual no hay respuesta, el
      recordatorio NO se reintenta: ver send_reminder().
 
+Además de los recordatorios, la corrida saluda a quien cumple años hoy
+(run_cumpleanos / tabla birthday_sent_log, ver sql/30_cumpleanos.sql). Va
+última a propósito: es lo único que no avisa de nada que haya que hacer.
+
 Todo queda logueado en logs/cron/alma_cron.log y en stdout.
 """
 
@@ -30,6 +34,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import logging
 import sys
 import traceback
@@ -81,6 +86,37 @@ PARTICIPANTE = "participante"
 EMAIL_ENDPOINT = f"http://{settings.API_HOST}:{settings.API_PORT}/emails/send"
 NOTIFY_ENDPOINT = f"http://{settings.API_HOST}:{settings.API_PORT}/notifications/notify"
 EMAIL_TEMPLATE = "event_assignment"
+BIRTHDAY_TEMPLATE = "birthday"
+
+# A quién se saluda. Un "pendiente" todavía no fue aprobado por nadie y un
+# "inactivo" dejó de participar: a los dos, un saludo del equipo les llegaría
+# como un mail de una organización en la que no están.
+BIRTHDAY_STATUSES = ("activo",)
+
+# ── Modo prueba ────────────────────────────────────────────────────────────
+#
+# Con CRON_EMAIL_PRUEBA puesto, TODOS los mails de la corrida van a esa
+# dirección en lugar de a su destinatario real.
+#
+# Para qué: la única forma de probar el camino completo —consulta, reserva,
+# Resend, campanita— es con una corrida de verdad, y una corrida de verdad en
+# producción le escribe a voluntarias reales. Con un cumpleaños de prueba mal
+# cargado, el saludo le llega a alguien que no cumple años.
+#
+# No tiene valor por defecto a propósito: si se activara solo, la corrida de
+# todos los días dejaría de avisarle a nadie y nadie se enteraría, porque el
+# log seguiría diciendo "enviado". Se pone a mano para una corrida y se saca:
+#
+#     CRON_EMAIL_PRUEBA=manunovo@gmail.com ./venv/bin/python alma_cron.py
+#
+# La campanita NO se redirige: no manda nada hacia afuera y se lee en la app
+# de quien corresponda, así que no hay nada de qué protegerse.
+EMAIL_PRUEBA = (os.getenv("CRON_EMAIL_PRUEBA") or "").strip()
+
+
+def destinatario(email_real: str) -> list[str]:
+    """A quién se le manda de verdad. Ver EMAIL_PRUEBA."""
+    return [EMAIL_PRUEBA] if EMAIL_PRUEBA else [email_real]
 REQUEST_TIMEOUT = 20  # segundos
 
 # /emails/send espera a Resend antes de contestar, así que este timeout tiene que
@@ -139,6 +175,11 @@ log = _build_logger()
 # cada línea se entienda sola, sin saber cómo funciona el cron por dentro.
 
 DAY_NAMES = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+
+
+#: Ancho del separador de día. 68 columnas entran en una terminal de 100
+#: contando el prefijo del log (fecha + nivel), que son unos 30 caracteres.
+REGLA = "=" * 68
 
 
 def _human_date(d: date) -> str:
@@ -390,7 +431,7 @@ def send_reminder(row: dict, offset: int, audience: str = VOLUNTARIO) -> tuple[s
     subject = f"Recordatorio: {event_name} — {when_label} ({event_date.strftime('%d/%m')})"
 
     payload = {
-        "to": [row["email"]],
+        "to": destinatario(row["email"]),
         "subject": subject,
         "template": EMAIL_TEMPLATE,
         "variables": variables,
@@ -678,6 +719,294 @@ def send_participant_push(row: dict, offset: int) -> None:
         log.warning("  (el mail salió, pero la notificación al celular no: %s)", exc)
 
 
+
+# ── Cumpleaños ─────────────────────────────────────────────────────────────
+#
+# El único mail del sistema que no avisa de una obligación. No se puede
+# desactivar por evento como los recordatorios, porque no cuelga de ningún
+# evento: cuelga de una fecha que la persona cargó en su perfil. Quien no
+# tenga fecha de nacimiento, simplemente no entra en la consulta.
+
+def fetch_birthdays(conn, today: date) -> list[dict]:
+    """Quiénes cumplen años hoy.
+
+    ── El 29 de febrero ───────────────────────────────────────────────
+    Tres de cada cuatro años esa fecha no existe, y la comparación directa
+    (mes y día iguales a los de hoy) dejaría a esa persona sin saludo salvo
+    en los bisiestos. Se la saluda el 28 de febrero, que es el último día que
+    el calendario le ofrece: antes y no después, porque un saludo de
+    cumpleaños llega tarde el 1 de marzo y no llega tarde el 28.
+
+    La condición extra se arma en Python y no en SQL a propósito: `today` ya
+    viene en hora de Argentina (today_ar), así que la decisión de qué día es
+    hoy se toma una sola vez y en un solo lugar. Preguntarle el día a MySQL
+    la tomaría de nuevo, con el reloj del servidor, que está en otra zona.
+    """
+    condiciones = ["(MONTH(v.birth_date) = %s AND DAY(v.birth_date) = %s)"]
+    params: list = [today.month, today.day]
+
+    es_bisiesto = (today.year % 4 == 0 and today.year % 100 != 0) or today.year % 400 == 0
+    if today.month == 2 and today.day == 28 and not es_bisiesto:
+        condiciones.append("(MONTH(v.birth_date) = 2 AND DAY(v.birth_date) = 29)")
+
+    marcadores = ", ".join(["%s"] * len(BIRTHDAY_STATUSES))
+    sql = f"""
+        SELECT
+            v.id         AS volunteer_id,
+            v.name       AS name,
+            v.last_name  AS last_name,
+            v.email      AS email,
+            v.birth_date AS birth_date
+        FROM voluntarios v
+        WHERE v.birth_date IS NOT NULL
+          AND ({" OR ".join(condiciones)})
+          AND v.status IN ({marcadores})
+          AND v.email IS NOT NULL
+          AND v.email <> ''
+        ORDER BY v.id ASC
+    """
+    with conn.cursor() as cur:
+        cur.execute(sql, (*params, *BIRTHDAY_STATUSES))
+        return cur.fetchall()
+
+
+def already_greeted(conn, volunteer_id: int, year: int, today: date) -> bool:
+    """Reserva el saludo. True si ya estaba reservado (o sea: no mandar).
+
+    Igual que already_sent: el INSERT IGNORE es la reserva, y se hace ANTES de
+    mandar nada. Si dos corridas se pisan, la segunda encuentra la fila puesta
+    y no manda. Ver sql/30_cumpleanos.sql.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT IGNORE INTO birthday_sent_log (volunteer_id, year, sent_on)
+            VALUES (%s, %s, %s)
+            """,
+            (volunteer_id, year, today),
+        )
+        reservado_ahora = cur.rowcount == 1
+    conn.commit()
+    return not reservado_ahora
+
+
+def release_greeting(conn, volunteer_id: int, year: int) -> None:
+    """Suelta la reserva. SOLO cuando sabemos que el mail no salió."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM birthday_sent_log WHERE volunteer_id=%s AND year=%s",
+            (volunteer_id, year),
+        )
+    conn.commit()
+
+
+def send_birthday(row: dict) -> tuple[str, str]:
+    """Manda el saludo. Devuelve (resultado, motivo), igual que send_reminder.
+
+    Comparte con send_reminder el endpoint, el timeout largo y los tres
+    estados. La única diferencia es la plantilla y que acá la única variable
+    es el nombre: el mail no tiene nada que informar.
+    """
+    nombre = (row["name"] or "").strip()
+
+    payload = {
+        "to": destinatario(row["email"]),
+        # Sin la fecha ni el apellido: el asunto se corta a los ~35 caracteres
+        # en el celular y lo único que tiene que sobrevivir es el saludo.
+        "subject": "¡Feliz cumpleaños!",
+        "template": BIRTHDAY_TEMPLATE,
+        # html.escape porque _render hace un replace pelado: un apóstrofo o un
+        # "&" en el nombre llegaría crudo al HTML.
+        "variables": {"name": html.escape(nombre)},
+        "sent_by_volunteer_id": None,
+    }
+
+    request = urllib.request.Request(
+        EMAIL_ENDPOINT,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Key": settings.INTERNAL_API_KEY,
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=EMAIL_REQUEST_TIMEOUT) as resp:
+            status_code = resp.status
+            raw_body = resp.read()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:200].strip()
+        return REJECTED, f"el servidor respondió {exc.code}" + (f" ({detail})" if detail else "")
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            return UNKNOWN, "el servidor no respondió a tiempo al conectar"
+        return REJECTED, f"no me pude conectar al servidor ({exc.reason})"
+    except TimeoutError:
+        # Ver la nota larga en send_reminder: puede haber salido igual, así que
+        # la reserva NO se libera.
+        return UNKNOWN, f"el servidor no respondió en {EMAIL_REQUEST_TIMEOUT}s"
+
+    if status_code != 201:
+        return REJECTED, f"el servidor respondió {status_code}"
+
+    # 201 significa "quedó registrado", no "llegó": el resultado real de Resend
+    # viene en el campo status del cuerpo.
+    try:
+        body = json.loads(raw_body)
+    except (ValueError, TypeError):
+        body = {}
+
+    if body.get("status") == "failed":
+        motivo = (body.get("error_message") or "").strip()[:200]
+        return REJECTED, "Resend lo rechazó" + (f": {motivo}" if motivo else "")
+
+    return ACCEPTED, ""
+
+
+
+def _notificar(payload: dict, contexto: str) -> None:
+    """Un POST a /notifications/notify. Best-effort: nunca rompe la corrida.
+
+    El endpoint manda el webpush en BackgroundTasks, así que contesta sin
+    esperar al navegador de nadie: llamarlo varias veces seguidas no acumula
+    demora. (En serie y esperando el push, tres destinatarios ya daban
+    timeout; por eso el envío quedó del otro lado.)
+    """
+    request = urllib.request.Request(
+        NOTIFY_ENDPOINT,
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Key": settings.INTERNAL_API_KEY,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as resp:
+            if resp.status != 201:
+                log.warning("  (no pude avisar por la campanita a %s: respondió %s)", contexto, resp.status)
+    except Exception as exc:  # noqa: BLE001 — la campanita nunca rompe el cron
+        log.warning("  (no pude avisar por la campanita a %s: %s)", contexto, exc)
+
+
+def fetch_admins(conn) -> list[dict]:
+    """Los admins activos, para contarles quién cumple años.
+
+    Solo admins y no todo el equipo: con veinte voluntarios, avisarle a todos
+    de cada cumpleaños convierte la campanita en algo que se ignora, y una
+    campanita que se ignora también se pierde los avisos que importan. El
+    admin es quien puede llevar el saludo al grupo, que es donde sirve.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, name, last_name
+            FROM voluntarios
+            WHERE is_admin = 1 AND status = 'activo'
+            ORDER BY id ASC
+            """
+        )
+        return cur.fetchall()
+
+
+def send_birthday_push(conn, row: dict) -> None:
+    """La campanita del día: al que cumple, y a los admins para que lo saluden.
+
+    Va DESPUÉS del mail y aislada: si esto falla, el saludo por mail ya salió
+    y quedó registrado igual. Tampoco toca los contadores — el cumpleaños se
+    cuenta como saludado cuando salió el mail, que es el saludo de verdad.
+    """
+    nombre = (row["name"] or "").strip()
+    completo = f"{nombre} {row['last_name'] or ''}".strip()
+
+    # 1) Al cumpleañero.
+    _notificar(
+        {
+            "user_type": "voluntario",
+            "user_id": row["volunteer_id"],
+            "title": "¡Feliz cumpleaños! 🎂",
+            "body": "Hoy es tu día. Que lo pases muy lindo.",
+            "kind": "birthday",
+            "url": "/inicio",
+        },
+        completo,
+    )
+
+    # 2) A los admins.
+    try:
+        admins = fetch_admins(conn)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("  (no pude buscar a los admins para avisarles del cumpleaños: %s)", exc)
+        return
+
+    for admin in admins:
+        # Si el que cumple años ES admin, ya recibió el saludo de arriba.
+        # Mandarle además "hoy cumple años Fulano" —siendo él Fulano— es
+        # una notificación que se lee como un error del sistema.
+        if admin["id"] == row["volunteer_id"]:
+            continue
+
+        _notificar(
+            {
+                "user_type": "voluntario",
+                "user_id": admin["id"],
+                "title": f"Hoy cumple años {completo}",
+                "body": "Un saludo del equipo le va a alegrar el día.",
+                "kind": "birthday",
+                "url": "/voluntarios",
+            },
+            f"admin {admin['name']}",
+        )
+
+
+def run_cumpleanos(conn, today: date) -> dict:
+    """Saluda a quien cumpla años hoy. Devuelve los contadores para el resumen."""
+    contadores = {"sent": 0, "skipped": 0, "failed": 0, "unknown": 0}
+
+    try:
+        cumplen = fetch_birthdays(conn, today)
+    except Exception as exc:  # noqa: BLE001
+        # Si la tabla todavía no existe (falta correr 30_cumpleanos.sql), esto
+        # NO puede tumbar los recordatorios, que son lo importante del día.
+        log.error("Cumpleaños: no pude consultarlos (%s). Sigo con el resto.", exc)
+        return contadores
+
+    if not cumplen:
+        log.info("Cumpleaños: hoy no cumple años nadie.")
+        return contadores
+
+    for row in cumplen:
+        quien = f"{row['name']} {row['last_name'] or ''}".strip()
+        try:
+            if already_greeted(conn, row["volunteer_id"], today.year, today):
+                contadores["skipped"] += 1
+                continue
+
+            resultado, motivo = send_birthday(row)
+
+            if resultado == ACCEPTED:
+                contadores["sent"] += 1
+                log.info("🎂 %s — ¡feliz cumpleaños!", quien)
+                send_birthday_push(conn, row)
+            elif resultado == UNKNOWN:
+                contadores["unknown"] += 1
+                log.error(
+                    "? Cumpleaños SIN CONFIRMAR: %s. Motivo: %s. Puede haber salido "
+                    "igual, así que NO se reintenta.", quien, motivo,
+                )
+            else:
+                release_greeting(conn, row["volunteer_id"], today.year)
+                contadores["failed"] += 1
+                log.error("✗ Cumpleaños de %s: %s. Se reintenta mañana.", quien, motivo)
+        except Exception as exc:  # noqa: BLE001
+            # Un saludo que explota no se puede llevar puestos a los demás.
+            contadores["failed"] += 1
+            log.error("✗ Cumpleaños de %s: error inesperado (%s).", quien, exc)
+
+    return contadores
+
+
 # ── Orquestación ───────────────────────────────────────────────────────────
 
 # ── Tercera tanda: compras que quedaron sin pagar ──────────────────────
@@ -743,7 +1072,7 @@ def enviar_compra_pendiente(row: dict) -> tuple[str, str]:
     base = settings.APP_BASE_URL.rstrip("/")
 
     payload = {
-        "to": [row["email"]],
+        "to": destinatario(row["email"]),
         "subject": f"Tu inscripción a {row['title']} quedó pendiente",
         "template": "compra_pendiente",
         "variables": {
@@ -840,7 +1169,26 @@ def run_compras_pendientes(conn, today: date) -> dict:
 
 def run() -> int:
     today = today_ar()
-    log.info("── Recordatorios ALMA · %s ──", _human_date(today))
+    # El corte de día, en bloque y no en una línea.
+    #
+    # El archivo es una sola tira: cada corrida agrega entre tres y veinte
+    # renglones, y todos empiezan igual —fecha, nivel, barra—. Con "──" de un
+    # lado y del otro, el comienzo de un día pesaba lo mismo que cualquier
+    # "✓ Fulano" del medio, así que para encontrar la corrida de ayer había
+    # que leer las fechas una por una.
+    #
+    # Tres renglones y la fecha en mayúscula: la regla de "=" no aparece en
+    # ningún otro lado del log, así que el ojo la encuentra pasando rápido y
+    # `grep -n "^=" ` lista todos los días de un saque.
+    log.info("")
+    log.info(REGLA)
+    log.info("   RECORDATORIOS ALMA   ·   %s", _human_date(today).upper())
+    log.info(REGLA)
+    if EMAIL_PRUEBA:
+        # Bien arriba y en WARNING: una corrida en modo prueba que pase
+        # desapercibida se lee como una corrida normal —el log dice
+        # "enviado" igual— y nadie se entera de que no le llegó a nadie.
+        log.warning("   ⚠ MODO PRUEBA: todos los mails van a %s", EMAIL_PRUEBA)
     log.debug("Log completo en %s", LOG_FILE)
 
     sent = 0
@@ -936,6 +1284,15 @@ def run() -> int:
         failed += compras["failed"]
         unknown += compras["unknown"]
 
+        # Cuarta tanda: los cumpleaños del día. Va última porque es la única
+        # que no avisa de nada que haya que hacer: si algo se rompe antes,
+        # que se rompa después de los recordatorios y no en vez de ellos.
+        cumples = run_cumpleanos(conn, today)
+        sent += cumples["sent"]
+        skipped += cumples["skipped"]
+        failed += cumples["failed"]
+        unknown += cumples["unknown"]
+
     except Exception as exc:  # noqa: BLE001
         log.exception("Se cortó la corrida por un error inesperado: %s", exc)
         # Falla catastrófica (la corrida se cortó): alerta con el traceback completo.
@@ -976,7 +1333,10 @@ def run() -> int:
     if not resumen:
         resumen.append("no había nada para enviar")
 
-    log.info("── Listo: %s ──", ", ".join(resumen))
+    # El pie cierra con una regla más liviana que la de arriba: marca el final
+    # de la corrida sin competir con el comienzo del día siguiente.
+    log.info("-" * len(REGLA))
+    log.info("   LISTO · %s", ", ".join(resumen))
     return 0
 
 

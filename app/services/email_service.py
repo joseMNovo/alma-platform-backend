@@ -354,6 +354,42 @@ _BODIES: dict[str, str] = {
   Gracias por tu compromiso con ALMA. 💙
 </p>""",
 
+    # Saludo de CUMPLEAÑOS, automático (alma_cron.py). Una sola variable:
+    # el nombre. Sin botón, sin links a nada que haya que hacer y sin pedirle
+    # nada a quien lo recibe — es el único mail del sistema que no viene a
+    # avisar de una obligación, y meterle un "ver el calendario" lo volvería
+    # uno más. El turquesa de la marca en el título en vez del lavanda que
+    # usan los recordatorios: que se vea distinto desde la primera línea.
+    "birthday": """<h1 style="margin:0 0 16px;color:#5EC0CF;font-size:30px;font-weight:700;line-height:1.3;
+           font-family:'Nunito Sans',Arial,sans-serif;">
+  ¡Feliz cumpleaños, {{name}}!
+</h1>
+<p style="margin:0 0 24px;color:#6B6B6B;font-size:16px;line-height:1.8;font-weight:300;">
+  Hoy es tu día y queríamos saludarte.
+</p>
+<table role="presentation" cellspacing="0" cellpadding="0"
+       style="margin:0 auto 28px;background:#F2FAFB;border-radius:8px;width:100%;max-width:400px;">
+  <tr>
+    <td style="padding:24px 28px;text-align:center;">
+      <p style="margin:0;color:#4D4D4D;font-size:15px;line-height:1.8;font-weight:300;">
+        Gracias por el tiempo y el cuidado que ponés en ALMA.
+        Lo que hacés acá le cambia el día a muchas familias
+        &mdash;y muchas veces en días que para vos eran comunes.
+      </p>
+    </td>
+  </tr>
+</table>
+<p style="margin:0 0 20px;color:#6B6B6B;font-size:15px;line-height:1.8;font-weight:300;">
+  Así que hoy no te pedimos nada: ni un recordatorio, ni algo pendiente.
+  Solo que la pases lindo, con la gente que querés.
+</p>
+<p style="margin:0;color:#6B6B6B;font-size:15px;font-weight:300;">
+  Que cumplas muchos más.
+</p>
+<p style="margin:8px 0 0;color:#9A9A9A;font-size:14px;font-weight:600;">
+  El equipo de ALMA 💙
+</p>""",
+
     # Recordatorio de evento DISPARADO A MANO por un admin (botón del calendario).
     # Neutral: sirve tanto para voluntarios como para participantes.
     "event_reminder": """\
