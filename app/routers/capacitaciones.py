@@ -23,7 +23,7 @@ from app.models.participant import ParticipantProfile
 from app.schemas.training import (
     TrainingCreate, TrainingUpdate, TrainingOut,
     TrainingItemCreate, TrainingItemUpdate, TrainingItemOut,
-    ItemReorder, ProgressUpdate, ProgressOut, ViewCreate,
+    ItemReorder, TrainingReorder, ProgressUpdate, ProgressOut, ViewCreate,
     SharedAccountAlert, VideoCheckRequest, VideoCheckResult,
     slugify,
 )
@@ -396,6 +396,44 @@ def create_training(data: TrainingCreate, db: Session = Depends(get_db)):
         log_error("Error al crear capacitación", module="capacitaciones", action="create", exc_info=True)
         raise
 
+
+@router.put("/reorder", response_model=List[TrainingOut])
+def reorder_trainings(data: TrainingReorder, db: Session = Depends(get_db)):
+    """Acomoda las capacitaciones a mano.
+
+    La columna `sort_order` y el ORDER BY ya existían desde el principio;
+    lo único que faltaba era poder escribirla sin entrar a la base.
+
+    OJO con el lugar: esta ruta va ANTES que PUT /{training_id}. FastAPI
+    resuelve por orden de declaración, así que declarada después, "reorder"
+    entraría como training_id y daría un 422 por no ser un número.
+
+    Las que no vengan en la lista quedan donde estaban. Mandar solo una
+    categoría es válido y no desacomoda al resto.
+    """
+    if not data.order:
+        return []
+
+    trainings = db.query(Training).filter(Training.id.in_(data.order)).all()
+    by_id = {t.id: t for t in trainings}
+
+    try:
+        # Arranca en 1 y no en 0: `sort_order` tiene default 0, así que el 0
+        # es "nunca se acomodó". Dejarlo libre hace que una capacitación
+        # nueva caiga arriba de todo hasta que alguien la ubique.
+        for posicion, training_id in enumerate(data.order, start=1):
+            if training_id in by_id:
+                by_id[training_id].sort_order = posicion
+        db.commit()
+        log_info("Capacitaciones reordenadas", module="capacitaciones", action="reorder_trainings",
+                 meta={"cuantas": len(data.order)})
+        ordenadas = sorted(trainings, key=lambda t: t.sort_order)
+        return [_serialize_training(t, has_access=True, include_items=False) for t in ordenadas]
+    except Exception:
+        db.rollback()
+        log_error("Error al reordenar capacitaciones", module="capacitaciones",
+                  action="reorder_trainings", exc_info=True)
+        raise
 
 @router.put("/{training_id}", response_model=TrainingOut)
 def update_training(training_id: int, data: TrainingUpdate, db: Session = Depends(get_db)):

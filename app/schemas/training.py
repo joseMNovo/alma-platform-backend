@@ -132,6 +132,17 @@ class ItemReorder(BaseModel):
     order: List[int]
 
 
+class TrainingReorder(BaseModel):
+    """Nuevo orden de las CAPACITACIONES: lista de ids en el orden deseado.
+
+    Viene la lista entera y no "movete un lugar" a propósito: el orden que
+    manda el cliente es el que queda, así que dos admins acomodando al mismo
+    tiempo terminan en un orden coherente —el del último que guardó— y no en
+    uno mezclado a partir de dos movimientos relativos.
+    """
+    order: List[int]
+
+
 # ── Capacitaciones ─────────────────────────────────────────────────────
 
 class TrainingBase(BaseModel):
