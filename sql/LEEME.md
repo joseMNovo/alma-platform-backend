@@ -50,6 +50,9 @@ tienen `ALTER` que fallan si ya se aplicaron (revisar antes de repetir).
 | 25 | ⚠️ `25_inventario_y_puesto_de_venta.sql` | Une los dos catálogos: `stand_products.inventory_item_id` + alta en `inventario` de los productos que ya existían. El stock pasa a salir del inventario |
 | 26 | `26_unificar_merch_duplicado.sql` | **No aplicó.** Apuntaba a un diagnóstico equivocado (ítems duplicados sin fila en góndola); correrlo no borró nada ni hizo daño. El problema real lo arregla el 27 |
 | 27 | `27_borrar_inventario_de_productos_dados_de_baja.sql` | Borra los ítems de `inventario` que el 25 creó para productos del puesto **dados de baja** (`is_active = 0`) y sin ventas. Antes rescata lo que se hubiera cargado a mano en ellos |
+| 29 | `29_ventas_offline.sql` | Ventas del puesto cargadas sin conexión, para sincronizar después |
+| 30 | ⚠️ `30_cumpleanos.sql` | `birthday_sent_log` (un saludo por persona y por año) + `ALTER` que suma `'birthday'` al ENUM `notifications.kind` |
+| 31 | `31_unificar_personas.sql` | **Una sola vez.** Empareja lo que ya quedó divergido entre una persona y su ficha de voluntario/a: apaga los logins de quien tenía los dos roles vivos, crea los espejos que faltaban y llena los huecos cruzados. Arranca con un diagnóstico de solo lectura; los conflictos reales los deja listados para resolver a mano |
 
 `15_encuestas.sql` va **antes** que `16_certificados_emitidos.sql`: un certificado
 referencia el intento de evaluación que lo habilitó.

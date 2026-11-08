@@ -25,6 +25,7 @@ from app.schemas.participant import (
 from app.models.access import PersonAccessGrant
 from app.models.calendar import CalendarEventParticipant as CEPModel
 from app.services import access_service
+from app.services.espejo_persona import propagar_a_voluntario
 from app.utils.logger import log_info, log_warn, log_error
 
 router = APIRouter()
@@ -399,8 +400,13 @@ def update_profile(id: int, data: ParticipantProfileUpdate, db: Session = Depend
     prof = db.query(ProfileModel).filter(ProfileModel.participant_id == id).first()
     if not prof:
         raise HTTPException(status_code=404, detail="Perfil no encontrado")
-    for key, value in data.model_dump(exclude_unset=True).items():
+    cambios = data.model_dump(exclude_unset=True)
+    for key, value in cambios.items():
         setattr(prof, key, value)
+    # Los roles son mutuamente excluyentes, asi que normalmente no hay ficha de
+    # voluntario del otro lado y esto no hace nada. Se llama igual: si alguna
+    # vez queda una persona con los dos roles, que no vuelva a divergir.
+    propagar_a_voluntario(db, prof, cambios.keys())
     db.commit()
     db.refresh(prof)
     return prof

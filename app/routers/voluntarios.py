@@ -11,6 +11,12 @@ from app.schemas.tokens import VerifyEmailRequest
 from app.schemas.email_log import SendEmailRequest
 from app.services import token_service, email_service
 from app.services.notification_service import notify_user
+from app.services.espejo_persona import (
+    desactivar_login_participante,
+    participante_activo_con_email,
+    propagar_a_persona,
+    rellenar_huecos,
+)
 from app.utils.logger import log_info, log_warn, log_error
 from config import settings
 
@@ -128,6 +134,12 @@ def _sync_persona_espejo(db: Session, v: VoluntarioModel, persona_id: Optional[i
         profile.phone = v.phone
     if not profile.birth_date:
         profile.birth_date = v.birth_date
+
+    # Y al reves: si la persona ya estaba cargada con datos que la ficha de
+    # voluntario no tiene, la ficha los toma. Sin esto quedaba a medio llenar y
+    # el cron de cumpleanos —que lee voluntarios.birth_date— no veia la fecha
+    # que si estaba cargada del otro lado.
+    rellenar_huecos(v, profile)
     return profile
 
 
@@ -137,10 +149,20 @@ def create_voluntario(data: VoluntarioCreate, db: Session = Depends(get_db)):
         v = VoluntarioModel(**data.model_dump())
         db.add(v)
         db.flush()  # obtener v.id antes de espejar la persona
-        _sync_persona_espejo(db, v)  # mantiene el directorio de personas consistente
+        profile = _sync_persona_espejo(db, v)  # mantiene el directorio de personas consistente
+
+        # Si esa persona tenia cuenta de participante, se apaga: los roles son
+        # mutuamente excluyentes (ver espejo_persona). Aca se CONVIERTE en vez de
+        # rechazar con un 409, porque por esta misma puerta entra la restauracion
+        # de un backup completo, y un 409 la cortaria por la mitad.
+        convertido = desactivar_login_participante(db, profile)
+
         db.commit()
         db.refresh(v)
-        log_info("Voluntario creado", module="voluntarios", action="create", meta={"id": v.id})
+        log_info(
+            "Voluntario creado", module="voluntarios", action="create",
+            meta={"id": v.id, "convirtio_participante": convertido is not None},
+        )
         return v
     except Exception:
         db.rollback()
@@ -155,13 +177,25 @@ def update_voluntario(id: int, data: VoluntarioUpdate, db: Session = Depends(get
         log_warn("Voluntario no encontrado para editar", module="voluntarios", action="edit", meta={"id": id})
         raise HTTPException(status_code=404, detail="Voluntario no encontrado")
     try:
-        for key, value in data.model_dump(exclude_unset=True).items():
+        cambios = data.model_dump(exclude_unset=True)
+        for key, value in cambios.items():
             setattr(v, key, value)
+
+        # Los datos de contacto estan tambien en la persona espejo. Sin esto,
+        # editar la fecha de nacimiento aca la dejaba distinta de la que muestra
+        # Base de datos, y el cron de cumpleanos (que lee `voluntarios`)
+        # terminaba saludando segun un dato que la otra pantalla desmentia.
+        persona = propagar_a_persona(db, v, cambios.keys())
+
         db.commit()
         db.refresh(v)
-        log_info("Voluntario actualizado", module="voluntarios", action="edit", meta={"id": id})
+        log_info(
+            "Voluntario actualizado", module="voluntarios", action="edit",
+            meta={"id": id, "persona_sincronizada": persona.id if persona else None},
+        )
         return v
     except Exception:
+        db.rollback()
         log_error("Error al actualizar voluntario", module="voluntarios", action="edit", meta={"id": id}, exc_info=True)
         raise
 
@@ -190,6 +224,29 @@ def register_voluntario(data: VoluntarioRegister, background_tasks: BackgroundTa
     if db.query(VoluntarioModel).filter(VoluntarioModel.email == data.email).first():
         log_warn("Intento de registro con email ya existente", module="voluntarios", action="register")
         raise HTTPException(status_code=409, detail="El email ya está registrado")
+
+    # Ya tiene cuenta de participante. El formulario de participante hace este
+    # mismo chequeo cruzado desde el otro lado; faltaba de este, y sin el la
+    # persona se creaba un segundo login con otro PIN y quedaba con los dos
+    # roles vivos.
+    #
+    # Aca se RECHAZA y no se convierte (como si hace el ABM del admin): pasar de
+    # participante a voluntario/a es una decision del equipo, no algo que uno se
+    # pueda dar a si mismo llenando un formulario publico. El camino bueno es
+    # Base de datos -> Habilitar como voluntario/a, que ademas le conserva el PIN.
+    if participante_activo_con_email(db, data.email) is not None:
+        log_warn(
+            "Intento de registro como voluntario con un email de participante",
+            module="voluntarios", action="register",
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Ese email ya tiene una cuenta de participante. Pedile al equipo de "
+                "ALMA que te habilite como voluntario/a: así entrás con el mismo PIN "
+                "y no perdés nada de lo que ya hiciste."
+            ),
+        )
 
     try:
         v = VoluntarioModel(
@@ -323,6 +380,10 @@ def enroll_volunteer_from_db(data: VoluntarioEnrollFromDb, background_tasks: Bac
             profile.phone = data.phone
         if not profile.birth_date:
             profile.birth_date = data.birth_date
+
+        # Y al reves (ver rellenar_huecos): la persona elegida en Base de datos
+        # puede tener telefono o fecha de nacimiento que el formulario no mando.
+        rellenar_huecos(v, profile)
 
         # CONVERSIÓN participante → voluntario: si la persona tenía login de
         # participante, se DESACTIVA (no se borra, para no perder su data). Es
@@ -465,10 +526,18 @@ def approve_voluntario(id: int, background_tasks: BackgroundTasks, db: Session =
     try:
         v.status = "activo"
         # Recién al aprobar el voluntario entra al directorio maestro de personas.
-        _sync_persona_espejo(db, v)
+        profile = _sync_persona_espejo(db, v)
+        # Y si esa persona tenia login de participante, se apaga: mismo cierre
+        # que hace enroll-from-db. Con el chequeo cruzado del registro esto casi
+        # no deberia dispararse; queda para que las dos puertas que aprueban a
+        # alguien terminen dejando el mismo estado.
+        convertido = desactivar_login_participante(db, profile)
         db.commit()
         db.refresh(v)
-        log_info("Voluntario aprobado", module="voluntarios", action="approve", meta={"id": id})
+        log_info(
+            "Voluntario aprobado", module="voluntarios", action="approve",
+            meta={"id": id, "convirtio_participante": convertido is not None},
+        )
     except Exception:
         db.rollback()
         log_error("Error al aprobar voluntario", module="voluntarios", action="approve", meta={"id": id}, exc_info=True)

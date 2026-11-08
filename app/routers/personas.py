@@ -7,6 +7,7 @@ from app.database import get_db
 from app.models.participant import ParticipantProfile as ProfileModel
 from app.models.voluntario import Voluntario as VoluntarioModel
 from app.schemas.persona import Persona, PersonaCreate, PersonaUpdate
+from app.services.espejo_persona import propagar_a_voluntario
 from app.utils.logger import log_info, log_warn, log_error
 
 router = APIRouter()
@@ -98,11 +99,21 @@ def update_persona(id: int, data: PersonaUpdate, db: Session = Depends(get_db)):
         log_warn("Persona no encontrada para editar", module="personas", action="edit_persona", meta={"id": id})
         raise HTTPException(status_code=404, detail="Persona no encontrada")
     try:
-        for key, value in data.model_dump(exclude_unset=True).items():
+        cambios = data.model_dump(exclude_unset=True)
+        for key, value in cambios.items():
             setattr(p, key, value)
+
+        # Si la persona tiene ficha de voluntaria, los datos de contacto que se
+        # acaban de editar viajan tambien para alla. Mismo motivo que en el PUT
+        # de voluntarios, en el otro sentido.
+        vol = propagar_a_voluntario(db, p, cambios.keys())
+
         db.commit()
         db.refresh(p)
-        log_info("Persona actualizada", module="personas", action="edit_persona", meta={"id": id})
+        log_info(
+            "Persona actualizada", module="personas", action="edit_persona",
+            meta={"id": id, "voluntario_sincronizado": vol.id if vol else None},
+        )
         return p
     except IntegrityError:
         db.rollback()
