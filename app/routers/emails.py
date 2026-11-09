@@ -35,7 +35,11 @@ def list_logs(
     template: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
-    q = db.query(EmailLog).order_by(EmailLog.sent_at.desc())
+    # Se desempata por id: `sent_at` tiene resolución de segundo, así que
+    # varios mails de la misma tanda comparten marca y el orden entre ellos
+    # quedaba librado a cómo la base devolviera las filas. Mismo criterio que
+    # la auditoría de accesos.
+    q = db.query(EmailLog).order_by(EmailLog.sent_at.desc(), EmailLog.id.desc())
     if status:
         q = q.filter(EmailLog.status == status)
     if template:
