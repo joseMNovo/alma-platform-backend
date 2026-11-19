@@ -21,6 +21,7 @@ from app.routers import (
     group_histories,
     announcements,
     activity,
+    avisos,
     emails,
     pin_reset,
     push,
@@ -71,6 +72,7 @@ app.include_router(ideas.router,         prefix="/ideas",          tags=["Ideas"
 app.include_router(group_histories.router, prefix="/group-histories", tags=["GroupHistories"], **common)
 app.include_router(announcements.router, prefix="/announcements", tags=["Announcements"],  **common)
 app.include_router(activity.router,      prefix="/activity",      tags=["Activity"],       **common)
+app.include_router(avisos.router,        prefix="/avisos",         tags=["Avisos"],          **common)
 app.include_router(emails.router,        prefix="/emails",         tags=["Emails"],          **common)
 app.include_router(pin_reset.router,     prefix="/pin-reset",      tags=["PinReset"],        **common)
 app.include_router(push.router,          prefix="/push",           tags=["Push"],            **common)

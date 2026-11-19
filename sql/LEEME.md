@@ -53,6 +53,7 @@ tienen `ALTER` que fallan si ya se aplicaron (revisar antes de repetir).
 | 29 | `29_ventas_offline.sql` | Ventas del puesto cargadas sin conexión, para sincronizar después |
 | 30 | ⚠️ `30_cumpleanos.sql` | `birthday_sent_log` (un saludo por persona y por año) + `ALTER` que suma `'birthday'` al ENUM `notifications.kind` |
 | 31 | `31_unificar_personas.sql` | **Una sola vez.** Empareja lo que ya quedó divergido entre una persona y su ficha de voluntario/a: apaga los logins de quien tenía los dos roles vivos, crea los espejos que faltaban y llena los huecos cruzados. Arranca con un diagnóstico de solo lectura; los conflictos reales los deja listados para resolver a mano |
+| 32 | `32_diagnostico_calendario_voluntarios.sql` | **Solo lectura, no cambia nada.** Dos SELECT para ver a quién ofrece hoy el formulario de evento para asignar: la lista sale sin filtrar por `status`, así que incluye voluntariados pendientes e inactivos. El segundo lista los eventos ya guardados con gente que un filtro sacaría |
 
 `15_encuestas.sql` va **antes** que `16_certificados_emitidos.sql`: un certificado
 referencia el intento de evaluación que lo habilitó.
